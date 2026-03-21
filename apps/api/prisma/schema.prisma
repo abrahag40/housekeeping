@@ -1,0 +1,309 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ======================= ENUMS =======================
+
+enum BedStatus {
+  AVAILABLE
+  OCCUPIED
+  DIRTY
+  CLEANING
+  BLOCKED
+}
+
+enum CleaningStatus {
+  PENDING
+  READY
+  UNASSIGNED
+  IN_PROGRESS
+  PAUSED
+  DONE
+  VERIFIED
+  CANCELLED
+}
+
+enum HousekeepingRole {
+  HOUSEKEEPER
+  SUPERVISOR
+  RECEPTIONIST
+}
+
+enum RoomType {
+  PRIVATE
+  SHARED
+}
+
+enum TaskType {
+  CLEANING
+  SANITIZATION
+  MAINTENANCE
+  PREPARATION
+}
+
+enum Capability {
+  CLEANING
+  SANITIZATION
+  MAINTENANCE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskLogEvent {
+  CREATED
+  ASSIGNED
+  READY
+  STARTED
+  PAUSED
+  RESUMED
+  COMPLETED
+  VERIFIED
+  CANCELLED
+  REOPENED
+  NOTE_ADDED
+}
+
+enum CheckoutSource {
+  CLOUDBEDS
+  MANUAL
+}
+
+enum MaintenanceCategory {
+  PLUMBING
+  ELECTRICAL
+  FURNITURE
+  PEST
+  OTHER
+}
+
+enum DiscrepancyType {
+  BED_STATUS_MISMATCH   // Cama marcada diferente a lo que housekeeping ve
+  GUEST_EXTENSION       // Huésped quiere extender estadía
+  UNEXPECTED_OCCUPANCY  // Cama supuestamente vacía pero tiene huésped
+  OTHER
+}
+
+enum DiscrepancyStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+// ======================= CORE MODELS =======================
+
+model Property {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  rooms     Room[]
+  staff     HousekeepingStaff[]
+  pmsConfig PmsConfig?
+  settings  PropertySettings?
+}
+
+model Room {
+  id              String   @id @default(uuid())
+  propertyId      String
+  number          String
+  floor           Int?
+  type            RoomType
+  capacity        Int
+  cloudbedsRoomId String?
+
+  property  Property   @relation(fields: [propertyId], references: [id])
+  beds      Bed[]
+  checkouts Checkout[]
+
+  @@unique([propertyId, number])
+}
+
+model Bed {
+  id        String    @id @default(uuid())
+  label     String
+  roomId    String
+  status    BedStatus @default(AVAILABLE)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  room          Room             @relation(fields: [roomId], references: [id])
+  cleaningTasks CleaningTask[]
+  discrepancies BedDiscrepancy[]
+}
+
+model HousekeepingStaff {
+  id           String           @id @default(uuid())
+  propertyId   String
+  name         String
+  email        String           @unique
+  passwordHash String
+  role         HousekeepingRole
+  active       Boolean          @default(true)
+  capabilities Capability[]
+  createdAt    DateTime         @default(now())
+
+  property      Property        @relation(fields: [propertyId], references: [id])
+  tasks         CleaningTask[]  @relation("AssignedTasks")
+  verifiedTasks CleaningTask[]  @relation("VerifiedTasks")
+  taskLogs      TaskLog[]
+  cleaningNotes         CleaningNote[]
+  pushTokens            PushToken[]
+  checkouts             Checkout[]       @relation("ManualCheckouts")
+  issues                MaintenanceIssue[]
+  reportedDiscrepancies BedDiscrepancy[] @relation("DiscrepancyReporter")
+  resolvedDiscrepancies BedDiscrepancy[] @relation("DiscrepancyResolver")
+}
+
+model Checkout {
+  id                     String         @id @default(uuid())
+  roomId                 String
+  guestName              String?
+  actualCheckoutAt       DateTime
+  source                 CheckoutSource
+  cloudbedsReservationId String?        @unique
+  isEarlyCheckout        Boolean        @default(false)
+  hasSameDayCheckIn      Boolean        @default(false)
+  notes                  String?
+  enteredById            String?
+  cancelled              Boolean        @default(false)
+  cancelledAt            DateTime?
+  createdAt              DateTime       @default(now())
+
+  room      Room                @relation(fields: [roomId], references: [id])
+  enteredBy HousekeepingStaff?  @relation("ManualCheckouts", fields: [enteredById], references: [id])
+  tasks     CleaningTask[]
+}
+
+model CleaningTask {
+  id                 String         @id @default(uuid())
+  bedId              String
+  checkoutId         String?
+  assignedToId       String?
+  status             CleaningStatus @default(PENDING)
+  taskType           TaskType       @default(CLEANING)
+  requiredCapability Capability     @default(CLEANING)
+  priority           Priority       @default(MEDIUM)
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  verifiedAt         DateTime?
+  verifiedById       String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  bed        Bed                 @relation(fields: [bedId], references: [id])
+  checkout   Checkout?           @relation(fields: [checkoutId], references: [id])
+  assignedTo HousekeepingStaff?  @relation("AssignedTasks", fields: [assignedToId], references: [id])
+  verifiedBy HousekeepingStaff?  @relation("VerifiedTasks", fields: [verifiedById], references: [id])
+  logs       TaskLog[]
+  notes      CleaningNote[]
+  issues     MaintenanceIssue[]
+
+  @@index([status])
+  @@index([assignedToId, status])
+  @@index([bedId])
+  @@index([checkoutId])
+}
+
+model TaskLog {
+  id        String       @id @default(uuid())
+  taskId    String
+  staffId   String?      // Nullable: eventos del sistema no tienen staff asociado
+  event     TaskLogEvent
+  note      String?
+  createdAt DateTime     @default(now())
+
+  task  CleaningTask       @relation(fields: [taskId], references: [id])
+  staff HousekeepingStaff? @relation(fields: [staffId], references: [id])
+
+  @@index([taskId])
+}
+
+model CleaningNote {
+  id        String   @id @default(uuid())
+  taskId    String
+  staffId   String
+  content   String
+  createdAt DateTime @default(now())
+
+  task  CleaningTask      @relation(fields: [taskId], references: [id])
+  staff HousekeepingStaff @relation(fields: [staffId], references: [id])
+}
+
+model MaintenanceIssue {
+  id           String              @id @default(uuid())
+  taskId       String
+  reportedById String
+  category     MaintenanceCategory
+  description  String
+  photoUrl     String?
+  resolved     Boolean             @default(false)
+  createdAt    DateTime            @default(now())
+
+  task       CleaningTask      @relation(fields: [taskId], references: [id])
+  reportedBy HousekeepingStaff @relation(fields: [reportedById], references: [id])
+}
+
+model PushToken {
+  id         String   @id @default(uuid())
+  staffId    String
+  token      String   @unique
+  platform   String
+  active     Boolean  @default(true)
+  lastSeenAt DateTime @default(now())
+
+  staff HousekeepingStaff @relation(fields: [staffId], references: [id])
+}
+
+model PmsConfig {
+  id            String   @id @default(uuid())
+  propertyId    String   @unique
+  type          String   @default("CLOUDBEDS")
+  apiKey        String
+  webhookSecret String
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id])
+}
+
+model PropertySettings {
+  id                  String   @id @default(uuid())
+  propertyId          String   @unique
+  defaultCheckoutTime String   @default("11:00")  // HH:mm 24h
+  timezone            String   @default("America/Mexico_City")
+  pmsMode             String   @default("STANDALONE") // "STANDALONE" | "CONNECTED"
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id])
+}
+
+model BedDiscrepancy {
+  id           String            @id @default(uuid())
+  bedId        String
+  reportedById String
+  resolvedById String?
+  type         DiscrepancyType
+  status       DiscrepancyStatus @default(OPEN)
+  description  String
+  resolution   String?
+  createdAt    DateTime          @default(now())
+  resolvedAt   DateTime?
+
+  bed        Bed                @relation(fields: [bedId], references: [id])
+  reportedBy HousekeepingStaff  @relation("DiscrepancyReporter", fields: [reportedById], references: [id])
+  resolvedBy HousekeepingStaff? @relation("DiscrepancyResolver", fields: [resolvedById], references: [id])
+
+  @@index([bedId])
+  @@index([status])
+}

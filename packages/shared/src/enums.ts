@@ -1,0 +1,102 @@
+export enum BedStatus {
+  AVAILABLE = 'AVAILABLE',
+  OCCUPIED = 'OCCUPIED',
+  DIRTY = 'DIRTY',
+  CLEANING = 'CLEANING',
+  BLOCKED = 'BLOCKED',
+}
+
+export enum CleaningStatus {
+  PENDING = 'PENDING',
+  READY = 'READY',
+  UNASSIGNED = 'UNASSIGNED',
+  IN_PROGRESS = 'IN_PROGRESS',
+  PAUSED = 'PAUSED',
+  DONE = 'DONE',
+  VERIFIED = 'VERIFIED',
+  CANCELLED = 'CANCELLED',
+}
+
+export enum HousekeepingRole {
+  HOUSEKEEPER = 'HOUSEKEEPER',
+  SUPERVISOR = 'SUPERVISOR',
+  RECEPTIONIST = 'RECEPTIONIST',
+}
+
+export enum RoomType {
+  PRIVATE = 'PRIVATE',
+  SHARED = 'SHARED',
+}
+
+export enum TaskType {
+  CLEANING = 'CLEANING',
+  SANITIZATION = 'SANITIZATION',
+  MAINTENANCE = 'MAINTENANCE',
+  PREPARATION = 'PREPARATION',
+}
+
+export enum Capability {
+  CLEANING = 'CLEANING',
+  SANITIZATION = 'SANITIZATION',
+  MAINTENANCE = 'MAINTENANCE',
+}
+
+export enum Priority {
+  LOW = 'LOW',
+  MEDIUM = 'MEDIUM',
+  HIGH = 'HIGH',
+  URGENT = 'URGENT',
+}
+
+export enum TaskLogEvent {
+  CREATED = 'CREATED',
+  ASSIGNED = 'ASSIGNED',
+  READY = 'READY',
+  STARTED = 'STARTED',
+  PAUSED = 'PAUSED',
+  RESUMED = 'RESUMED',
+  COMPLETED = 'COMPLETED',
+  VERIFIED = 'VERIFIED',
+  CANCELLED = 'CANCELLED',
+  REOPENED = 'REOPENED',
+  NOTE_ADDED = 'NOTE_ADDED',
+}
+
+export enum CheckoutSource {
+  CLOUDBEDS = 'CLOUDBEDS',
+  MANUAL = 'MANUAL',
+}
+
+export enum MaintenanceCategory {
+  PLUMBING = 'PLUMBING',
+  ELECTRICAL = 'ELECTRICAL',
+  FURNITURE = 'FURNITURE',
+  PEST = 'PEST',
+  OTHER = 'OTHER',
+}
+
+/** States used on the DailyPlanning grid cell (web UI only, not persisted) */
+export enum PlanningCellState {
+  EMPTY = 'EMPTY',
+  OCCUPIED = 'OCCUPIED',
+  CHECKOUT = 'CHECKOUT',
+  CHECKOUT_WITH_CHECKIN = 'CHECKOUT_WITH_CHECKIN',
+}
+
+export enum DiscrepancyType {
+  BED_STATUS_MISMATCH = 'BED_STATUS_MISMATCH',
+  GUEST_EXTENSION = 'GUEST_EXTENSION',
+  UNEXPECTED_OCCUPANCY = 'UNEXPECTED_OCCUPANCY',
+  OTHER = 'OTHER',
+}
+
+export enum DiscrepancyStatus {
+  OPEN = 'OPEN',
+  ACKNOWLEDGED = 'ACKNOWLEDGED',
+  RESOLVED = 'RESOLVED',
+}
+
+export enum PmsMode {
+  STANDALONE = 'STANDALONE',
+  CONNECTED = 'CONNECTED',
+}

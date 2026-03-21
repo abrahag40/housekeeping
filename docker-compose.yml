@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: housekeeping
+      POSTGRES_USER: housekeeping
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U housekeeping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - housekeeping
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://housekeeping:${POSTGRES_PASSWORD}@postgres:5432/housekeeping
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: 7d
+      NODE_ENV: production
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+      CLOUDBEDS_WEBHOOK_SECRET: ${CLOUDBEDS_WEBHOOK_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - housekeeping
+
+volumes:
+  postgres_data:
+
+networks:
+  housekeeping:
+    driver: bridge
