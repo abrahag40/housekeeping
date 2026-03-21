@@ -1,0 +1,23 @@
+services:
+  postgres:
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: housekeeping
+      POSTGRES_USER: housekeeping
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.dev
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+      - ./apps/api/prisma:/app/apps/api/prisma
+      - ./packages:/app/packages
+    environment:
+      DATABASE_URL: postgresql://housekeeping:devpassword@postgres:5432/housekeeping
+      JWT_SECRET: dev-jwt-secret-not-for-production
+      JWT_EXPIRES_IN: 7d
+      NODE_ENV: development
+    command: npm run dev --workspace=@housekeeping/api

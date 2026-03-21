@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: housekeeping_test
+          POSTGRES_USER: housekeeping
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate --workspace=@housekeeping/api
+        env:
+          DATABASE_URL: postgresql://housekeeping:testpassword@localhost:5432/housekeeping_test
+
+      - name: Run migrations
+        run: npm run db:migrate:deploy --workspace=@housekeeping/api
+        env:
+          DATABASE_URL: postgresql://housekeeping:testpassword@localhost:5432/housekeeping_test
+
+      - name: Lint
+        run: npx turbo lint
+
+      - name: Test
+        run: npx turbo test
+        env:
+          DATABASE_URL: postgresql://housekeeping:testpassword@localhost:5432/housekeeping_test
+          JWT_SECRET: test-secret-not-for-production
+          JWT_EXPIRES_IN: 1h
+          NODE_ENV: test
