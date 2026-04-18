@@ -272,7 +272,7 @@ function AddRoomForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
         <div>
           <label className="form-label">Tipo *</label>
           <select
-            value={type}
+            value={category}
             onChange={(e) => setCategory(e.target.value as RoomCategory)}
             className="input"
           >

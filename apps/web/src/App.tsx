@@ -5,6 +5,7 @@ import { useAuthStore } from './store/auth'
 import { Sidebar, MobileNav } from './components/Sidebar'
 import { LoginPage } from './pages/LoginPage'
 import { RoomsPage } from './pages/RoomsPage'
+import { RoomsPage as PmsPage } from './modules/rooms/pages/RoomsPage'
 import { DailyPlanningPage } from './pages/DailyPlanningPage'
 import { KanbanPage } from './pages/KanbanPage'
 import { CheckoutsPage } from './pages/CheckoutsPage'
@@ -15,6 +16,16 @@ import { DiscrepanciesPage } from './pages/DiscrepanciesPage'
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 })
+
+function PmsLayout({ children }: { children: React.ReactNode }) {
+  const token = useAuthStore((s) => s.token)
+  if (!token) return <Navigate to="/login" replace />
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {children}
+    </div>
+  )
+}
 
 function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -43,12 +54,13 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/planning"        element={<ProtectedLayout><DailyPlanningPage /></ProtectedLayout>} />
           <Route path="/rooms"           element={<ProtectedLayout><RoomsPage /></ProtectedLayout>} />
+          <Route path="/pms"             element={<PmsLayout><PmsPage /></PmsLayout>} />
           <Route path="/kanban"          element={<ProtectedLayout><KanbanPage /></ProtectedLayout>} />
           <Route path="/checkouts"       element={<ProtectedLayout><CheckoutsPage /></ProtectedLayout>} />
           <Route path="/discrepancies"   element={<ProtectedLayout><DiscrepanciesPage /></ProtectedLayout>} />
           <Route path="/reports"         element={<ProtectedLayout><ReportsPage /></ProtectedLayout>} />
           <Route path="/settings/:section?" element={<ProtectedLayout><SettingsPage /></ProtectedLayout>} />
-          <Route path="*"                element={<Navigate to="/planning" replace />} />
+          <Route path="*"                element={<Navigate to="/pms" replace />} />
         </Routes>
       </BrowserRouter>
       <Toaster position="top-right" toastOptions={{ className: 'text-sm' }} />

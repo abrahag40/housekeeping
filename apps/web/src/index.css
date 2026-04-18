@@ -2,10 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── shadcn/ui CSS variables (neutral / radix-nova) ───────────────────────── */
 @layer base {
+  /* Channel-only values so Tailwind's <alpha-value> interpolation works:
+     e.g. oklch(var(--popover) / 0.5) = oklch(1 0 0 / 0.5)             */
+  :root {
+    --background:           1 0 0;
+    --foreground:           0.145 0 0;
+    --card:                 1 0 0;
+    --card-foreground:      0.145 0 0;
+    --popover:              1 0 0;
+    --popover-foreground:   0.145 0 0;
+    --primary:              0.205 0 0;
+    --primary-foreground:   0.985 0 0;
+    --secondary:            0.97 0 0;
+    --secondary-foreground: 0.205 0 0;
+    --muted:                0.97 0 0;
+    --muted-foreground:     0.556 0 0;
+    --accent:               0.97 0 0;
+    --accent-foreground:    0.205 0 0;
+    --destructive:          0.577 0.245 27.325;
+    --destructive-foreground: 0.985 0 0;
+    --border:               0.922 0 0;
+    --input:                0.922 0 0;
+    --ring:                 0.708 0 0;
+    --radius:               0.625rem;
+    --radius-md:            0.5rem;
+    --radius-sm:            0.375rem;
+    --radius-lg:            0.75rem;
+    --radius-xl:            1rem;
+  }
+
   html {
     font-family: system-ui, -apple-system, sans-serif;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: oklch(var(--background) / 1);
+    color: oklch(var(--foreground) / 1);
   }
 }
 

@@ -39,6 +39,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Principal',
     items: [
+      { to: '/pms',      icon: '📅', label: 'Timeline PMS' },
       { to: '/planning', icon: '📋', label: 'Planificación' },
       // 'Habitaciones' se eliminó de aquí: su funcionalidad (mapa en tiempo real
       // y checkout manual) fue absorbida por el módulo de Planificación (pestaña

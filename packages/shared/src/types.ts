@@ -239,6 +239,10 @@ export type SseEventType =
   | 'task:cancelled'
   | 'maintenance:reported'
   | 'discrepancy:reported'
+  | 'room:ready'
+  | 'checkout:confirmed'
+  | 'checkin:completed'
+  | 'room:moved'
 
 // ─── Offline Sync (Mobile) ────────────────────────────────────────────────────
 
@@ -250,4 +254,39 @@ export interface SyncOperation {
   taskId: string
   timestamp: string
   retryCount: number
+}
+
+// ─── Room Availability ────────────────────────────────────────────────────────
+//
+// Algorithm: half-open interval [checkIn, checkOut)
+// Two date ranges overlap iff: existingCheckIn < newCheckOut AND existingCheckOut > newCheckIn
+// Same-day turnover (existing.checkOut == new.checkIn) is NOT a conflict.
+//
+// Sources of conflict (in priority order):
+//   GUEST_STAY  — an active GuestStay record overlaps the requested dates (HARD)
+//   ROOM_STATUS — room is in MAINTENANCE or OUT_OF_SERVICE (SOFT — future supervisor override)
+
+export type ConflictSource = 'GUEST_STAY' | 'ROOM_STATUS'
+
+/** HARD = blocks booking. SOFT = operational warning (future: supervisor can override). */
+export type ConflictSeverity = 'HARD' | 'SOFT'
+
+export interface AvailabilityConflict {
+  /** Where the conflict originates */
+  source: ConflictSource
+  severity: ConflictSeverity
+  /** Guest name — only present for GUEST_STAY conflicts */
+  guestName?: string
+  /** Start of the conflicting existing reservation (ISO string) */
+  conflictStart: string
+  /** End of the conflicting existing reservation (ISO string) */
+  conflictEnd: string
+  /** Number of nights where the requested range overlaps the existing one */
+  overlapDays: number
+}
+
+export interface RoomAvailabilityResult {
+  /** True only when there are zero conflicts of any kind */
+  available: boolean
+  conflicts: AvailabilityConflict[]
 }

@@ -19,6 +19,11 @@ import { CloudbedsModule } from './integrations/cloudbeds/cloudbeds.module'
 import { SettingsModule } from './settings/settings.module'
 import { DiscrepanciesModule } from './discrepancies/discrepancies.module'
 import { ReportsModule } from './reports/reports.module'
+import { EmailModule } from './common/email/email.module'
+import { GuestStaysModule } from './pms/guest-stays/guest-stays.module'
+import { RoomReadinessModule } from './pms/room-readiness/room-readiness.module'
+import { RoomTypesModule } from './pms/room-types/room-types.module'
+import { StayJourneysModule } from './pms/stay-journeys/stay-journeys.module'
 import { TenantContextMiddleware } from './common/tenant-context.middleware'
 import { TenantContextService } from './common/tenant-context.service'
 import { TenantGuard } from './common/guards/tenant.guard'
@@ -50,6 +55,11 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
     SettingsModule,
     DiscrepanciesModule,
     ReportsModule,
+    EmailModule,
+    GuestStaysModule,
+    RoomReadinessModule,
+    RoomTypesModule,
+    StayJourneysModule,
   ],
   providers: [
     TenantContextService,
