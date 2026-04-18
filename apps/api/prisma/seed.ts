@@ -1,303 +1,559 @@
 import { PrismaClient } from '@prisma/client'
 import * as bcrypt from 'bcrypt'
-import { randomUUID } from 'crypto'
+import * as fs from 'fs'
+import * as path from 'path'
+
+/**
+ * Zenix seed — organización "Zenix Demo" con DOS hoteles del mismo tenant:
+ *
+ *   1. Hotel Tulum  (prop-hotel-tulum-001) — 17 habitaciones en 3 pisos +
+ *      cabañas. Recibe el set completo de escenarios operativos (41
+ *      estadías, 4 StayJourneys multi-segmento, cross-month, Semana Santa,
+ *      etc.) vía el fixture SQL `seed_hotel_tulum.sql`.
+ *
+ *   2. Hotel Cancún (prop-hotel-cancun-001) — 8 habitaciones, sirve de
+ *      banco de pruebas para aislamiento entre propiedades. Tiene un
+ *      subset curado de casos (past, in-house, arriving, extension).
+ *
+ * Credenciales de acceso (todas activas):
+ *   supervisor@demo.com   / supervisor123   (Tulum)
+ *   reception@demo.com    / reception123    (Tulum)
+ *   hk1@demo.com          / housekeeper123  (Tulum)
+ *   hk2@demo.com          / housekeeper123  (Tulum)
+ *   reception.cun@demo.com / reception123   (Cancún)
+ *   hk3@demo.com          / housekeeper123  (Cancún)
+ */
 
 const prisma = new PrismaClient()
+const hash = (pw: string) => bcrypt.hash(pw, 12)
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Days-offset helper for constructing guest-stay check-in/out timestamps
+ * relative to the current date. All times normalize to noon UTC so they sit
+ * inside the timeline grid regardless of local timezone.
+ */
+function daysFromNow(days: number, hour = 12): Date {
+  const d = new Date()
+  d.setHours(hour, 0, 0, 0)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🌱 Seeding database...')
+  console.log('🌱 Zenix seed — starting…\n')
 
-  // Create organization
+  // 0. CLEANUP LEGACY (phase 1 — delete data that doesn't gate on the new
+  // property existing). Previous seeds used `seed-property-1`; retire it
+  // so the timeline shows only the Tulum/Cancún dataset. Phase 2 (deleting
+  // the property row itself) runs later, after the new properties exist
+  // and staff have been re-homed.
+  const legacyPropertyId = 'seed-property-1'
+  await prisma.guestStay.deleteMany({ where: { propertyId: legacyPropertyId } })
+  await prisma.cleaningTask.deleteMany({ where: { bed: { room: { propertyId: legacyPropertyId } } } })
+  await prisma.bed.deleteMany({ where: { room: { propertyId: legacyPropertyId } } })
+  await prisma.room.deleteMany({ where: { propertyId: legacyPropertyId } })
+  await prisma.roomType.deleteMany({ where: { propertyId: legacyPropertyId } })
+  await prisma.propertySettings.deleteMany({ where: { propertyId: legacyPropertyId } })
+
+  // 1. ORGANIZATION ─────────────────────────────────────────────────────────
+  // Upsert by id so re-running the seed renames the old `demo-org` → `zenix-demo`
+  // in-place without creating a second tenant.
   const org = await prisma.organization.upsert({
-    where: { slug: 'demo-org' },
-    update: {},
+    where: { id: 'seed-org-1' },
+    update: { name: 'Zenix Demo', slug: 'zenix-demo' },
     create: {
       id: 'seed-org-1',
-      name: 'Demo Organization',
-      slug: 'demo-org',
+      name: 'Zenix Demo',
+      slug: 'zenix-demo',
       plan: 'STARTER',
+      countryCode: 'MX',
+      timezone: 'America/Cancun',
+      currency: 'USD',
     },
   })
-  console.log(`✅ Organization: ${org.name}`)
+  console.log(`✅ Org: ${org.name}`)
 
-  // Create a property
-  const property = await prisma.property.upsert({
-    where: { id: 'seed-property-1' },
-    update: {},
+  // 2. PROPERTIES ───────────────────────────────────────────────────────────
+  const tulum = await prisma.property.upsert({
+    where: { id: 'prop-hotel-tulum-001' },
+    update: { name: 'Hotel Tulum' },
     create: {
-      id: 'seed-property-1',
-      name: 'Hotel Demo',
+      id: 'prop-hotel-tulum-001',
+      organizationId: org.id,
+      name: 'Hotel Tulum',
+      type: 'HOTEL',
+      checkinTime: '15:00',
+      checkoutTime: '12:00',
     },
   })
-  console.log(`✅ Property: ${property.name}`)
-
-  // Create shared dorm rooms (hostal-style)
-  const dorm1 = await prisma.room.upsert({
-    where: { propertyId_number: { propertyId: property.id, number: 'Dorm1' } },
-    update: {},
+  const cancun = await prisma.property.upsert({
+    where: { id: 'prop-hotel-cancun-001' },
+    update: { name: 'Hotel Cancún' },
     create: {
-      propertyId: property.id,
-      number: 'Dorm1',
-      floor: 1,
-      category: 'SHARED',
-      capacity: 6,
+      id: 'prop-hotel-cancun-001',
+      organizationId: org.id,
+      name: 'Hotel Cancún',
+      type: 'HOTEL',
+      checkinTime: '15:00',
+      checkoutTime: '12:00',
     },
   })
+  console.log(`✅ Properties: ${tulum.name}, ${cancun.name}`)
 
-  const dorm2 = await prisma.room.upsert({
-    where: { propertyId_number: { propertyId: property.id, number: 'Dorm2' } },
-    update: {},
-    create: {
-      propertyId: property.id,
-      number: 'Dorm2',
-      floor: 1,
-      category: 'SHARED',
-      capacity: 4,
-    },
-  })
+  // 3. ROOM TYPES ───────────────────────────────────────────────────────────
 
-  // Create private rooms (hotel-style)
-  const room101 = await prisma.room.upsert({
-    where: { propertyId_number: { propertyId: property.id, number: '101' } },
-    update: {},
-    create: {
-      propertyId: property.id,
-      number: '101',
-      floor: 1,
-      category: 'PRIVATE',
-      capacity: 2,
-    },
-  })
-
-  const room102 = await prisma.room.upsert({
-    where: { propertyId_number: { propertyId: property.id, number: '102' } },
-    update: {},
-    create: {
-      propertyId: property.id,
-      number: '102',
-      floor: 1,
-      category: 'PRIVATE',
-      capacity: 2,
-    },
-  })
-  console.log('✅ Rooms created')
-
-  /**
-   * Re-crea las camas de una habitación desde cero.
-   *
-   * Por qué deleteMany + create en lugar de upsert:
-   *   Las versiones antiguas del seed usaban IDs no-UUID ('dorm1-Cama1') y labels sin
-   *   espacio ('Cama1'). Si hiciéramos upsert por label, los beds antiguos ('Cama1')
-   *   no coincidirían con los nuevos ('Cama 1') y quedarían huérfanos en la BD,
-   *   acumulando basura. Al borrar y recrear, garantizamos una pizarra limpia con
-   *   UUIDs válidos y labels consistentes en cada ejecución del seed.
-   *
-   * PRECAUCIÓN: En producción, este borrado cascadea tareas y discrepancias.
-   * Este seed es solo para desarrollo/demo — nunca ejecutarlo en producción.
-   */
-  async function recreateBeds(roomId: string, beds: { label: string; status: string }[]) {
-    // Obtener IDs de camas actuales para borrar sus dependencias en orden
-    const existingBeds = await prisma.bed.findMany({ where: { roomId }, select: { id: true } })
-    const bedIds = existingBeds.map((b) => b.id)
-
-    if (bedIds.length > 0) {
-      // Borrar en orden: primero los registros hijo, luego las tareas, luego las camas
-      // (FK: TaskLog → CleaningTask → Bed, CleaningNote → CleaningTask, etc.)
-      await prisma.taskLog.deleteMany({ where: { task: { bedId: { in: bedIds } } } })
-      await prisma.cleaningNote.deleteMany({ where: { task: { bedId: { in: bedIds } } } })
-      await prisma.maintenanceIssue.deleteMany({ where: { task: { bedId: { in: bedIds } } } })
-      await prisma.cleaningTask.deleteMany({ where: { bedId: { in: bedIds } } })
-      await prisma.bedDiscrepancy.deleteMany({ where: { bedId: { in: bedIds } } })
-    }
-
-    await prisma.bed.deleteMany({ where: { roomId } })
-    // Crear las camas nuevas con UUIDs válidos
-    for (const { label, status } of beds) {
-      await prisma.bed.create({ data: { id: randomUUID(), label, roomId, status: status as never } })
-    }
+  async function upsertRoomType(args: {
+    propertyId: string
+    name: string
+    code: string
+    maxOccupancy: number
+    baseRate: number
+    amenities: string[]
+  }) {
+    return prisma.roomType.upsert({
+      where: { propertyId_code: { propertyId: args.propertyId, code: args.code } },
+      update: {
+        name: args.name,
+        maxOccupancy: args.maxOccupancy,
+        baseRate: args.baseRate,
+        amenities: args.amenities,
+      },
+      create: {
+        organizationId: org.id,
+        propertyId: args.propertyId,
+        name: args.name,
+        code: args.code,
+        maxOccupancy: args.maxOccupancy,
+        baseRate: args.baseRate,
+        currency: 'USD',
+        amenities: args.amenities,
+      },
+    })
   }
 
-  // Create beds for dorms — status refleja la ocupación del demo
-  await recreateBeds(dorm1.id, [
-    { label: 'Cama 1', status: 'AVAILABLE' },
-    { label: 'Cama 2', status: 'AVAILABLE' },
-    { label: 'Cama 3', status: 'AVAILABLE' },
-    { label: 'Cama 4', status: 'AVAILABLE' },
-    { label: 'Cama 5', status: 'AVAILABLE' },
-    { label: 'Cama 6', status: 'AVAILABLE' },
+  const [tStd, tSup, tJrSuite, tSuite, tCabin] = await Promise.all([
+    upsertRoomType({ propertyId: tulum.id, name: 'Estándar',    code: 'STD', maxOccupancy: 2, baseRate:  70, amenities: ['WiFi', 'AC', 'TV'] }),
+    upsertRoomType({ propertyId: tulum.id, name: 'Superior',    code: 'SUP', maxOccupancy: 2, baseRate: 110, amenities: ['WiFi', 'AC', 'TV', 'Minibar'] }),
+    upsertRoomType({ propertyId: tulum.id, name: 'Junior Suite', code: 'JRS', maxOccupancy: 3, baseRate: 180, amenities: ['WiFi', 'AC', 'TV', 'Balcón'] }),
+    upsertRoomType({ propertyId: tulum.id, name: 'Suite',        code: 'STE', maxOccupancy: 4, baseRate: 280, amenities: ['WiFi', 'AC', 'TV', 'Jacuzzi', 'Balcón'] }),
+    upsertRoomType({ propertyId: tulum.id, name: 'Cabaña',       code: 'CAB', maxOccupancy: 2, baseRate: 130, amenities: ['WiFi', 'Fan', 'Hammock', 'Private garden'] }),
   ])
-  await recreateBeds(dorm2.id, [
-    { label: 'Cama 1', status: 'OCCUPIED' },
-    { label: 'Cama 2', status: 'OCCUPIED' },
-    { label: 'Cama 3', status: 'OCCUPIED' },
-    { label: 'Cama 4', status: 'OCCUPIED' },
+
+  const [cStd, cSup, cSuite] = await Promise.all([
+    upsertRoomType({ propertyId: cancun.id, name: 'Estándar', code: 'STD', maxOccupancy: 2, baseRate: 100, amenities: ['WiFi', 'AC', 'TV'] }),
+    upsertRoomType({ propertyId: cancun.id, name: 'Superior', code: 'SUP', maxOccupancy: 3, baseRate: 150, amenities: ['WiFi', 'AC', 'TV', 'Ocean View'] }),
+    upsertRoomType({ propertyId: cancun.id, name: 'Suite',    code: 'STE', maxOccupancy: 4, baseRate: 250, amenities: ['WiFi', 'AC', 'TV', 'Jacuzzi', 'Ocean View'] }),
   ])
-  // Habitaciones privadas — una sola cama por habitación
-  await recreateBeds(room101.id, [{ label: 'Cama 1', status: 'OCCUPIED' }])
-  await recreateBeds(room102.id, [{ label: 'Cama 1', status: 'AVAILABLE' }])
-  console.log('✅ Beds created')
+  console.log(`✅ RoomTypes: Tulum(${5}), Cancún(${3})`)
 
-  const hash = (password: string) => bcrypt.hash(password, 12)
+  // 4. ROOMS ────────────────────────────────────────────────────────────────
 
-  // Create supervisor
-  const supervisor = await prisma.housekeepingStaff.upsert({
-    where: { email: 'supervisor@demo.com' },
-    update: {},
-    create: {
-      organizationId: org.id,
-      propertyId: property.id,
-      name: 'Ana García',
-      email: 'supervisor@demo.com',
-      passwordHash: await hash('supervisor123'),
-      role: 'SUPERVISOR',
-      capabilities: ['CLEANING', 'SANITIZATION', 'MAINTENANCE'],
-    },
+  async function upsertRoom(args: {
+    propertyId: string
+    number: string
+    floor: number | null
+    category: 'PRIVATE' | 'SHARED'
+    capacity: number
+    roomTypeId: string
+    status?: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING'
+  }) {
+    return prisma.room.upsert({
+      where: { propertyId_number: { propertyId: args.propertyId, number: args.number } },
+      update: { floor: args.floor, capacity: args.capacity, roomTypeId: args.roomTypeId },
+      create: {
+        organizationId: org.id,
+        propertyId: args.propertyId,
+        number: args.number,
+        floor: args.floor,
+        category: args.category,
+        capacity: args.capacity,
+        roomTypeId: args.roomTypeId,
+        status: args.status ?? 'AVAILABLE',
+      },
+    })
+  }
+
+  // Hotel Tulum — 22 rooms matching the SQL fixture expectations.
+  // Floor 1 (101-106) STD · Floor 2 (201-205) SUP · Floor 3 (301-305) JRS
+  // Cabanas A1/A2 CAB · Villas B1/B2 STE · Premium C1/C2 STE
+  const tulumRoomSpecs: Array<Parameters<typeof upsertRoom>[0]> = [
+    { propertyId: tulum.id, number: '101', floor: 1, category: 'PRIVATE', capacity: 2, roomTypeId: tStd.id },
+    { propertyId: tulum.id, number: '102', floor: 1, category: 'PRIVATE', capacity: 2, roomTypeId: tStd.id },
+    { propertyId: tulum.id, number: '103', floor: 1, category: 'PRIVATE', capacity: 2, roomTypeId: tStd.id },
+    { propertyId: tulum.id, number: '104', floor: 1, category: 'PRIVATE', capacity: 2, roomTypeId: tStd.id },
+    { propertyId: tulum.id, number: '105', floor: 1, category: 'PRIVATE', capacity: 2, roomTypeId: tStd.id },
+    { propertyId: tulum.id, number: '106', floor: 1, category: 'PRIVATE', capacity: 2, roomTypeId: tStd.id },
+    { propertyId: tulum.id, number: '201', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: tSup.id },
+    { propertyId: tulum.id, number: '202', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: tSup.id },
+    { propertyId: tulum.id, number: '203', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: tSup.id },
+    { propertyId: tulum.id, number: '204', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: tSup.id },
+    { propertyId: tulum.id, number: '205', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: tSup.id },
+    { propertyId: tulum.id, number: '301', floor: 3, category: 'PRIVATE', capacity: 3, roomTypeId: tJrSuite.id },
+    { propertyId: tulum.id, number: '302', floor: 3, category: 'PRIVATE', capacity: 3, roomTypeId: tJrSuite.id },
+    { propertyId: tulum.id, number: '303', floor: 3, category: 'PRIVATE', capacity: 3, roomTypeId: tJrSuite.id },
+    { propertyId: tulum.id, number: '304', floor: 3, category: 'PRIVATE', capacity: 3, roomTypeId: tJrSuite.id },
+    { propertyId: tulum.id, number: '305', floor: 3, category: 'PRIVATE', capacity: 3, roomTypeId: tJrSuite.id },
+    { propertyId: tulum.id, number: 'A1',  floor: 0, category: 'PRIVATE', capacity: 2, roomTypeId: tCabin.id },
+    { propertyId: tulum.id, number: 'A2',  floor: 0, category: 'PRIVATE', capacity: 2, roomTypeId: tCabin.id },
+    { propertyId: tulum.id, number: 'B1',  floor: 0, category: 'PRIVATE', capacity: 4, roomTypeId: tSuite.id },
+    { propertyId: tulum.id, number: 'B2',  floor: 0, category: 'PRIVATE', capacity: 4, roomTypeId: tSuite.id },
+    { propertyId: tulum.id, number: 'C1',  floor: 0, category: 'PRIVATE', capacity: 4, roomTypeId: tSuite.id },
+    { propertyId: tulum.id, number: 'C2',  floor: 0, category: 'PRIVATE', capacity: 4, roomTypeId: tSuite.id },
+  ]
+  await Promise.all(tulumRoomSpecs.map(upsertRoom))
+
+  // Hotel Cancún — 8 rooms, smaller property for multi-property testing.
+  const cancunRoomSpecs: Array<Parameters<typeof upsertRoom>[0]> = [
+    { propertyId: cancun.id, number: '201', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: cStd.id },
+    { propertyId: cancun.id, number: '202', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: cStd.id },
+    { propertyId: cancun.id, number: '203', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: cStd.id },
+    { propertyId: cancun.id, number: '204', floor: 2, category: 'PRIVATE', capacity: 2, roomTypeId: cStd.id },
+    { propertyId: cancun.id, number: '301', floor: 3, category: 'PRIVATE', capacity: 3, roomTypeId: cSup.id },
+    { propertyId: cancun.id, number: '302', floor: 3, category: 'PRIVATE', capacity: 3, roomTypeId: cSup.id },
+    { propertyId: cancun.id, number: '401', floor: 4, category: 'PRIVATE', capacity: 4, roomTypeId: cSuite.id },
+    { propertyId: cancun.id, number: '402', floor: 4, category: 'PRIVATE', capacity: 4, roomTypeId: cSuite.id },
+  ]
+  const cancunRooms = await Promise.all(cancunRoomSpecs.map(upsertRoom))
+  console.log(`✅ Rooms: Tulum(${tulumRoomSpecs.length}), Cancún(${cancunRoomSpecs.length})`)
+
+  // 5. STAFF ────────────────────────────────────────────────────────────────
+
+  async function upsertStaff(args: {
+    email: string
+    name: string
+    password: string
+    role: 'SUPERVISOR' | 'RECEPTIONIST' | 'HOUSEKEEPER'
+    propertyId: string
+    capabilities?: Array<'CLEANING' | 'SANITIZATION' | 'MAINTENANCE'>
+  }) {
+    return prisma.housekeepingStaff.upsert({
+      where: { email: args.email },
+      update: { propertyId: args.propertyId, organizationId: org.id },
+      create: {
+        organizationId: org.id,
+        propertyId: args.propertyId,
+        email: args.email,
+        name: args.name,
+        passwordHash: await hash(args.password),
+        role: args.role,
+        capabilities: args.capabilities ?? [],
+      },
+    })
+  }
+
+  const supervisor  = await upsertStaff({ email: 'supervisor@demo.com',     name: 'Ana García',     password: 'supervisor123', role: 'SUPERVISOR',   propertyId: tulum.id,  capabilities: ['CLEANING', 'SANITIZATION', 'MAINTENANCE'] })
+  const reception   = await upsertStaff({ email: 'reception@demo.com',      name: 'Carlos López',   password: 'reception123',  role: 'RECEPTIONIST', propertyId: tulum.id })
+  await                   upsertStaff({ email: 'hk1@demo.com',              name: 'María Torres',   password: 'housekeeper123',role: 'HOUSEKEEPER',  propertyId: tulum.id,  capabilities: ['CLEANING', 'SANITIZATION'] })
+  await                   upsertStaff({ email: 'hk2@demo.com',              name: 'Pedro Ramírez',  password: 'housekeeper123',role: 'HOUSEKEEPER',  propertyId: tulum.id,  capabilities: ['CLEANING', 'MAINTENANCE'] })
+  const receptionC  = await upsertStaff({ email: 'reception.cun@demo.com',  name: 'Laura Mendez',   password: 'reception123',  role: 'RECEPTIONIST', propertyId: cancun.id })
+  await                   upsertStaff({ email: 'hk3@demo.com',              name: 'Luis Herrera',   password: 'housekeeper123',role: 'HOUSEKEEPER',  propertyId: cancun.id, capabilities: ['CLEANING'] })
+  console.log(`✅ Staff: 6 cuentas (4 Tulum, 2 Cancún); supervisor global = ${supervisor.email}`)
+
+  // 5b. CLEANUP LEGACY (phase 2) ────────────────────────────────────────────
+  // Now that Tulum exists and staff have been re-homed via the
+  // upsertStaff.update path above, we can delete the retired property.
+  await prisma.housekeepingStaff.updateMany({
+    where: { propertyId: legacyPropertyId },
+    data:  { propertyId: tulum.id },
   })
+  await prisma.property.deleteMany({ where: { id: legacyPropertyId } })
 
-  // Create receptionist
-  const receptionist = await prisma.housekeepingStaff.upsert({
-    where: { email: 'reception@demo.com' },
-    update: {},
-    create: {
-      organizationId: org.id,
-      propertyId: property.id,
-      name: 'Carlos López',
-      email: 'reception@demo.com',
-      passwordHash: await hash('reception123'),
-      role: 'RECEPTIONIST',
-      capabilities: [],
-    },
-  })
-
-  // Create housekeepers
-  const hk1 = await prisma.housekeepingStaff.upsert({
-    where: { email: 'hk1@demo.com' },
-    update: {},
-    create: {
-      organizationId: org.id,
-      propertyId: property.id,
-      name: 'María Torres',
-      email: 'hk1@demo.com',
-      passwordHash: await hash('housekeeper123'),
-      role: 'HOUSEKEEPER',
-      capabilities: ['CLEANING', 'SANITIZATION'],
-    },
-  })
-
-  await prisma.housekeepingStaff.upsert({
-    where: { email: 'hk2@demo.com' },
-    update: {},
-    create: {
-      organizationId: org.id,
-      propertyId: property.id,
-      name: 'Pedro Ramírez',
-      email: 'hk2@demo.com',
-      passwordHash: await hash('housekeeper123'),
-      role: 'HOUSEKEEPER',
-      capabilities: ['CLEANING', 'MAINTENANCE'],
-    },
-  })
-  console.log('✅ Staff created')
-
-  // Room Types
-  const roomTypes = await Promise.all([
-    prisma.roomType.upsert({
-      where: { propertyId_code: { propertyId: property.id, code: 'STD' } },
+  // 6. PROPERTY SETTINGS ───────────────────────────────────────────────────
+  for (const p of [tulum, cancun]) {
+    await prisma.propertySettings.upsert({
+      where: { propertyId: p.id },
       update: {},
       create: {
         organizationId: org.id,
-        propertyId: property.id,
-        name: 'Estándar',
-        code: 'STD',
-        maxOccupancy: 2,
-        baseRate: 120,
-        currency: 'USD',
-        amenities: ['WiFi', 'AC', 'TV'],
+        propertyId: p.id,
+        timezone: 'America/Cancun',
       },
-    }),
-    prisma.roomType.upsert({
-      where: { propertyId_code: { propertyId: property.id, code: 'JRS' } },
-      update: {},
-      create: {
-        organizationId: org.id,
-        propertyId: property.id,
-        name: 'Junior Suite',
-        code: 'JRS',
-        maxOccupancy: 3,
-        baseRate: 180,
-        currency: 'USD',
-        amenities: ['WiFi', 'AC', 'TV', 'Terrace', 'Ocean View'],
-      },
-    }),
-    prisma.roomType.upsert({
-      where: { propertyId_code: { propertyId: property.id, code: 'STE' } },
-      update: {},
-      create: {
-        organizationId: org.id,
-        propertyId: property.id,
-        name: 'Suite Master',
-        code: 'STE',
-        maxOccupancy: 4,
-        baseRate: 280,
-        currency: 'USD',
-        amenities: ['WiFi', 'AC', 'TV', 'Jacuzzi', 'Terrace', 'Ocean View'],
-      },
-    }),
-  ])
-  console.log('✅ Room types created')
+    })
+  }
 
-  // Update rooms with status and roomTypeId
-  const rooms = await prisma.room.findMany({ where: { propertyId: property.id } })
-  for (let i = 0; i < rooms.length; i++) {
-    const statuses: Array<'AVAILABLE' | 'OCCUPIED' | 'CLEANING'> = ['AVAILABLE', 'OCCUPIED', 'CLEANING', 'AVAILABLE']
-    const typeIndex = i % roomTypes.length
-    await prisma.room.update({
-      where: { id: rooms[i].id },
+  // 7. TULUM GUEST DATA — run the SQL fixture ──────────────────────────────
+  const sqlPath = path.join(__dirname, 'seed_hotel_tulum.sql')
+  if (fs.existsSync(sqlPath)) {
+    const sql = fs.readFileSync(sqlPath, 'utf8')
+    console.log(`\n🏖  Loading Hotel Tulum fixture (${sql.length.toLocaleString()} chars)…`)
+    await prisma.$executeRawUnsafe(sql)
+    const [{ count: tulumStays }] = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
+      `SELECT COUNT(*)::bigint AS count FROM guest_stays WHERE property_id = $1`,
+      tulum.id,
+    )
+    const [{ count: tulumJourneys }] = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
+      `SELECT COUNT(*)::bigint AS count FROM stay_journeys WHERE property_id = $1`,
+      tulum.id,
+    )
+    console.log(`   Tulum: ${tulumStays} stays · ${tulumJourneys} journeys`)
+  } else {
+    console.warn(`⚠️  ${sqlPath} not found — Tulum timeline will be empty`)
+  }
+
+  // 8. CANCÚN CURATED GUESTS ───────────────────────────────────────────────
+  // A compact scenario set so the Cancún timeline is visually meaningful
+  // without duplicating the 41-stay catalog. Covers: past/completed,
+  // in-house today, arriving today, arriving next week, extension, and a
+  // room move across two rooms.
+
+  await prisma.guestStay.deleteMany({ where: { propertyId: cancun.id } })
+  await prisma.stayJourney.deleteMany({ where: { propertyId: cancun.id } })
+
+  type CancunStay = {
+    id: string
+    roomNumber: string
+    guestName: string
+    guestEmail: string
+    checkIn: Date
+    checkOut: Date
+    actualCheckout?: Date
+    rate: number
+    paid: number
+    paymentStatus: 'PENDING' | 'PARTIAL' | 'PAID'
+    source: string
+    notes: string
+  }
+
+  const roomByNumber = new Map(cancunRooms.map((r) => [r.number, r]))
+
+  const cancunStays: CancunStay[] = [
+    // past completed
+    {
+      id: 'stay-cun-past-201',
+      roomNumber: '201',
+      guestName: 'Roberto Sánchez',
+      guestEmail: 'rsanchez@mail.com',
+      checkIn: daysFromNow(-9, 15),
+      checkOut: daysFromNow(-5, 12),
+      actualCheckout: daysFromNow(-5, 11),
+      rate: 100,
+      paid: 400,
+      paymentStatus: 'PAID',
+      source: 'booking.com',
+      notes: 'Estadía completada. Pago total al check-in.',
+    },
+    // in-house today (arrived a few days ago)
+    {
+      id: 'stay-cun-now-301',
+      roomNumber: '301',
+      guestName: 'Isabel Fernández',
+      guestEmail: 'isabel.f@mail.com',
+      checkIn: daysFromNow(-2, 15),
+      checkOut: daysFromNow(3, 12),
+      rate: 150,
+      paid: 300,
+      paymentStatus: 'PARTIAL',
+      source: 'direct',
+      notes: 'Huésped en casa. Saldo pendiente al checkout.',
+    },
+    // arriving today
+    {
+      id: 'stay-cun-arr-today-202',
+      roomNumber: '202',
+      guestName: 'Thomas Weber',
+      guestEmail: 'thomas.w@gmail.com',
+      checkIn: daysFromNow(0, 15),
+      checkOut: daysFromNow(5, 12),
+      rate: 100,
+      paid: 0,
+      paymentStatus: 'PENDING',
+      source: 'walk-in',
+      notes: 'Arriving today. Pago al check-in presencial.',
+    },
+    // arriving next week
+    {
+      id: 'stay-cun-arr-future-401',
+      roomNumber: '401',
+      guestName: 'Chen Wei',
+      guestEmail: 'chen.wei@corp.com',
+      checkIn: daysFromNow(6, 15),
+      checkOut: daysFromNow(13, 12),
+      rate: 250,
+      paid: 1750,
+      paymentStatus: 'PAID',
+      source: 'corporate',
+      notes: 'Viaje de negocios, pago corporativo.',
+    },
+    // long stay to seed an extension journey below
+    {
+      id: 'stay-cun-ext-302',
+      roomNumber: '302',
+      guestName: 'Julia Novak',
+      guestEmail: 'julia.n@remote.io',
+      checkIn: daysFromNow(-3, 15),
+      checkOut: daysFromNow(2, 12),
+      rate: 150,
+      paid: 750,
+      paymentStatus: 'PAID',
+      source: 'direct',
+      notes: 'Nómada digital. Extensión aprobada (ver StayJourney).',
+    },
+    // arriving in two days, canceled later (useful for future work)
+    {
+      id: 'stay-cun-arr-203',
+      roomNumber: '203',
+      guestName: 'Marie Dubois',
+      guestEmail: 'mdubois@mail.fr',
+      checkIn: daysFromNow(2, 15),
+      checkOut: daysFromNow(4, 12),
+      rate: 100,
+      paid: 0,
+      paymentStatus: 'PENDING',
+      source: 'expedia',
+      notes: 'Reserva confirmada por OTA, pago al checkout.',
+    },
+  ]
+
+  for (const s of cancunStays) {
+    const room = roomByNumber.get(s.roomNumber)
+    if (!room) continue
+    const nights = Math.max(
+      1,
+      Math.round((s.checkOut.getTime() - s.checkIn.getTime()) / 86400000),
+    )
+    await prisma.guestStay.create({
       data: {
-        status: statuses[i],
-        roomTypeId: roomTypes[typeIndex].id,
-      },
-    })
-  }
-  console.log('✅ Rooms updated with types and statuses')
-
-  // A GuestStay for the OCCUPIED room
-  const occupiedRoom = rooms.find((_, i) => i === 1)
-  if (occupiedRoom) {
-    await prisma.guestStay.upsert({
-      where: { id: 'demo-stay-001' },
-      update: {},
-      create: {
-        id: 'demo-stay-001',
+        id: s.id,
         organizationId: org.id,
-        propertyId: property.id,
-        roomId: occupiedRoom.id,
-        guestName: 'Sarah Johnson',
-        guestEmail: 'sarah@example.com',
-        nationality: 'US',
-        documentType: 'passport',
-        documentNumber: 'AB123456',
-        paxCount: 2,
-        checkinAt: new Date(),
-        scheduledCheckout: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-        ratePerNight: 180,
+        propertyId: cancun.id,
+        roomId: room.id,
+        guestName: s.guestName,
+        guestEmail: s.guestEmail,
+        paxCount: 1,
+        checkinAt: s.checkIn,
+        scheduledCheckout: s.checkOut,
+        actualCheckout: s.actualCheckout ?? null,
+        ratePerNight: s.rate,
         currency: 'USD',
-        totalAmount: 540,
-        amountPaid: 300,
-        paymentStatus: 'PARTIAL',
-        source: 'walk-in',
-        checkedInById: receptionist.id,
+        totalAmount: s.rate * nights,
+        amountPaid: s.paid,
+        paymentStatus: s.paymentStatus,
+        source: s.source,
+        notes: s.notes,
+        checkedInById: receptionC.id,
       },
     })
-    console.log('✅ Guest stay created')
   }
 
-  console.log('\n📋 Seed credentials:')
-  console.log(`  Supervisor:   supervisor@demo.com  / supervisor123`)
-  console.log(`  Receptionist: reception@demo.com   / reception123`)
-  console.log(`  Housekeeper:  hk1@demo.com         / housekeeper123`)
-  console.log(`  Housekeeper:  hk2@demo.com         / housekeeper123`)
-  console.log('\n✨ Seeding complete!')
+  // Extension StayJourney for Julia Novak — original segment + approved
+  // extension (same room, 3 extra nights).
+  const juliaStayId = 'stay-cun-ext-302'
+  const juliaJourney = await prisma.stayJourney.create({
+    data: {
+      id: 'journey-cun-julia',
+      organizationId: org.id,
+      propertyId: cancun.id,
+      guestStayId: juliaStayId,
+      guestName: 'Julia Novak',
+      guestEmail: 'julia.n@remote.io',
+      status: 'ACTIVE',
+      journeyCheckIn: daysFromNow(-3, 15),
+      journeyCheckOut: daysFromNow(5, 12),
+      segments: {
+        create: [
+          {
+            roomId: roomByNumber.get('302')!.id,
+            guestStayId: juliaStayId,
+            checkIn: daysFromNow(-3, 15),
+            checkOut: daysFromNow(2, 12),
+            status: 'ACTIVE',
+            locked: true,
+            reason: 'ORIGINAL',
+            rateSnapshot: 150,
+          },
+          {
+            roomId: roomByNumber.get('302')!.id,
+            checkIn: daysFromNow(2, 12),
+            checkOut: daysFromNow(5, 12),
+            status: 'PENDING',
+            locked: false,
+            reason: 'EXTENSION_SAME_ROOM',
+            rateSnapshot: 150,
+            notes: 'Extensión aprobada por supervisor, misma tarifa',
+          },
+        ],
+      },
+      events: {
+        create: [
+          {
+            eventType: 'JOURNEY_CREATED',
+            actorId: reception.id,
+            payload: { channel: 'direct' },
+          },
+          {
+            eventType: 'EXTENSION_APPROVED',
+            actorId: supervisor.id,
+            payload: { extraNights: 3, reason: 'Guest requested — room available' },
+          },
+        ],
+      },
+    },
+    include: { segments: true },
+  })
+
+  // Room-move StayJourney for Chen Wei — starts in 401, moves to 402 mid-stay.
+  const chenStayId = 'stay-cun-arr-future-401'
+  const chenCheckIn  = daysFromNow(6, 15)
+  const chenMoveDate = daysFromNow(9, 11)
+  const chenCheckOut = daysFromNow(13, 12)
+  await prisma.stayJourney.create({
+    data: {
+      id: 'journey-cun-chen',
+      organizationId: org.id,
+      propertyId: cancun.id,
+      guestStayId: chenStayId,
+      guestName: 'Chen Wei',
+      guestEmail: 'chen.wei@corp.com',
+      status: 'ACTIVE',
+      journeyCheckIn: chenCheckIn,
+      journeyCheckOut: chenCheckOut,
+      segments: {
+        create: [
+          {
+            roomId: roomByNumber.get('401')!.id,
+            guestStayId: chenStayId,
+            checkIn: chenCheckIn,
+            checkOut: chenMoveDate,
+            status: 'PENDING',
+            reason: 'ORIGINAL',
+            rateSnapshot: 250,
+          },
+          {
+            roomId: roomByNumber.get('402')!.id,
+            checkIn: chenMoveDate,
+            checkOut: chenCheckOut,
+            status: 'PENDING',
+            reason: 'ROOM_MOVE',
+            rateSnapshot: 250,
+            notes: 'Corporativo pidió suite con vista, se acomoda en 402',
+          },
+        ],
+      },
+      events: {
+        create: {
+          eventType: 'ROOM_MOVE_EXECUTED',
+          actorId: supervisor.id,
+          payload: { fromRoom: '401', toRoom: '402' },
+        },
+      },
+    },
+  })
+
+  console.log(`✅ Cancún: ${cancunStays.length} stays · 2 journeys (extension, room-move)`)
+
+  // ── Final summary ─────────────────────────────────────────────────────────
+  console.log('\n📋 Credenciales:')
+  console.log('  supervisor@demo.com      / supervisor123    (Supervisor · Tulum)')
+  console.log('  reception@demo.com       / reception123     (Recepción · Tulum)')
+  console.log('  hk1@demo.com             / housekeeper123   (Housekeeping · Tulum)')
+  console.log('  hk2@demo.com             / housekeeper123   (Housekeeping · Tulum)')
+  console.log('  reception.cun@demo.com   / reception123     (Recepción · Cancún)')
+  console.log('  hk3@demo.com             / housekeeper123   (Housekeeping · Cancún)')
+  console.log('\n✨ Seed complete.')
 }
 
 main()
