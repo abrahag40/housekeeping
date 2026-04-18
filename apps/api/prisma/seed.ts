@@ -27,7 +27,6 @@ async function main() {
     create: {
       id: 'seed-property-1',
       name: 'Hotel Demo',
-      organizationId: org.id,
     },
   })
   console.log(`✅ Property: ${property.name}`)
@@ -145,6 +144,7 @@ async function main() {
     where: { email: 'supervisor@demo.com' },
     update: {},
     create: {
+      organizationId: org.id,
       propertyId: property.id,
       name: 'Ana García',
       email: 'supervisor@demo.com',
@@ -159,6 +159,7 @@ async function main() {
     where: { email: 'reception@demo.com' },
     update: {},
     create: {
+      organizationId: org.id,
       propertyId: property.id,
       name: 'Carlos López',
       email: 'reception@demo.com',
@@ -173,6 +174,7 @@ async function main() {
     where: { email: 'hk1@demo.com' },
     update: {},
     create: {
+      organizationId: org.id,
       propertyId: property.id,
       name: 'María Torres',
       email: 'hk1@demo.com',
@@ -186,6 +188,7 @@ async function main() {
     where: { email: 'hk2@demo.com' },
     update: {},
     create: {
+      organizationId: org.id,
       propertyId: property.id,
       name: 'Pedro Ramírez',
       email: 'hk2@demo.com',
