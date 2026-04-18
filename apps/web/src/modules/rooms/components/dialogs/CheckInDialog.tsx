@@ -95,8 +95,14 @@ const step2Schema = z.object({
   path: ['checkOut'],
 })
 
-type Step1Data = z.infer<typeof step1Schema>
-type Step2Data = z.infer<typeof step2Schema>
+// Zod 4 coerce.number() has input=unknown and output=number. For react-hook-form
+// + @hookform/resolvers v5 we need the *input* type for the field values generic
+// (what the form accepts) and the *output* type for the submit handler (after
+// coercion). See `useForm<TInput, TContext, TOutput>` below.
+type Step1Input  = z.input<typeof step1Schema>
+type Step1Data   = z.output<typeof step1Schema>
+type Step2Input  = z.input<typeof step2Schema>
+type Step2Data   = z.output<typeof step2Schema>
 
 export interface NewStayData extends Step1Data, Step2Data {
   roomId: string
@@ -155,7 +161,7 @@ export function CheckInDialog({
   const [availConflicts, setAvailConflicts] = useState<AvailabilityConflict[]>([])
 
   // ── FORM PASO 1 ──
-  const f1 = useForm<Step1Data>({
+  const f1 = useForm<Step1Input, unknown, Step1Data>({
     resolver: zodResolver(step1Schema),
     defaultValues: {
       firstName: '', lastName: '', guestEmail: '',
@@ -168,7 +174,7 @@ export function CheckInDialog({
   // ── FORM PASO 2 ──
   const today = new Date()
   today.setHours(0,0,0,0)
-  const f2 = useForm<Step2Data>({
+  const f2 = useForm<Step2Input, unknown, Step2Data>({
     resolver: zodResolver(step2Schema),
     defaultValues: {
       checkIn:       initialCheckIn ?? today,
@@ -241,9 +247,15 @@ export function CheckInDialog({
   }
 
   function handleConfirm() {
+    // getValues() returns the raw (input) form values; coerced fields like
+    // `adults` and `ratePerNight` still look `unknown` at the type level.
+    // Parse through the schemas once so the outgoing payload matches
+    // NewStayData (numbers already coerced from the inputs' string values).
+    const step1 = step1Schema.parse(f1.getValues())
+    const step2 = step2Schema.parse(f2.getValues())
     onConfirm({
-      ...f1.getValues(),
-      ...f2.getValues(),
+      ...step1,
+      ...step2,
       roomId: initialRoomId ?? '',
     })
     onClose()
@@ -312,11 +324,13 @@ export function CheckInDialog({
   }
 
   // ── VALORES CALCULADOS ──
+  // `ratePerNight` and `amountPaid` go through `z.coerce.number()`, so their
+  // input type is `unknown`. Coerce here so the arithmetic below is typed.
   const checkIn       = f2.watch('checkIn')
   const checkOut      = f2.watch('checkOut')
-  const rate          = f2.watch('ratePerNight')
+  const rate          = Number(f2.watch('ratePerNight') ?? 0)
   const currency      = f2.watch('currency')
-  const amountPaid    = f2.watch('amountPaid')
+  const amountPaid    = Number(f2.watch('amountPaid') ?? 0)
   const source        = f2.watch('source')
 
   const nights = (checkIn && checkOut)
@@ -325,8 +339,8 @@ export function CheckInDialog({
         / 86400000
       ))
     : 1
-  const total   = (rate ?? 0) * nights
-  const balance = total - (amountPaid ?? 0)
+  const total   = rate * nights
+  const balance = total - amountPaid
 
   const selectedOta = OTA_OPTIONS.find(o => o.value === source)
 

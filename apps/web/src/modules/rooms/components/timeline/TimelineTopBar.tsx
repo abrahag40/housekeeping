@@ -1,4 +1,4 @@
-import { Search, Plus, Calendar, List, Bell, ChevronDown, Menu } from 'lucide-react'
+import { Search, Plus, Calendar, List, Bell, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { AppMenu } from '@/components/AppMenu'
 
 function NotificationBell({ count = 0 }: { count?: number }) {
   const hasNew = count > 0
@@ -50,13 +51,11 @@ interface TimelineTopBarProps {
 export function TimelineTopBar({ onNewReservation }: TimelineTopBarProps) {
   return (
     <div className="flex items-center gap-3 px-4 h-14 border-b border-slate-200 bg-white shrink-0">
-      {/* Left: menu + property name */}
-      <Button variant="ghost" size="icon" className="shrink-0">
-        <Menu className="h-5 w-5 text-slate-500" />
-      </Button>
+      {/* Left: global menu + property name */}
+      <AppMenu />
 
       <button className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 hover:text-slate-600 transition-colors">
-        Hospitalidad OS
+        Zenix
         <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
       </button>
 

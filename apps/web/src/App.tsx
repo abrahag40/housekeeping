@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import { useAuthStore } from './store/auth'
-import { Sidebar, MobileNav } from './components/Sidebar'
+import { Sidebar } from './components/Sidebar'
 import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { RoomsPage } from './pages/RoomsPage'
@@ -33,12 +33,10 @@ function ProtectedLayout({ children }: { children: React.ReactNode }) {
   if (!token) return <Navigate to="/login" replace />
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Desktop sidebar */}
+      {/* Global top bar with hamburger (AppMenu) — same UX everywhere */}
       <Sidebar />
-      {/* Mobile top bar + drawer */}
-      <MobileNav />
-      {/* Main content — offset for sidebar on lg, offset for top bar on mobile */}
-      <main className="lg:ml-64 pt-14 lg:pt-0 min-h-screen">
+      {/* pt-14 leaves room for the fixed top bar (h-14) */}
+      <main className="pt-14 min-h-screen">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 lg:py-6">
           {children}
         </div>

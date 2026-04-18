@@ -1,109 +1,33 @@
 /**
- * Sidebar.tsx — Navegación principal de la aplicación
+ * Sidebar.tsx — navegación global de la aplicación.
  *
- * Exports dos componentes que trabajan juntos para cubrir desktop y móvil:
+ * La navegación lateral fija fue reemplazada por un top bar único con el
+ * componente <AppMenu /> (hamburguesa + dropdown). Este archivo conserva
+ * sus exports (Sidebar, MobileNav) para no romper imports existentes,
+ * pero ambos ahora renderizan la misma barra superior.
  *
- *   <Sidebar />   — Sidebar fijo de 256px, visible solo en pantallas lg+.
- *                   Se monta una vez y nunca se desmonta.
+ * La barra incluye:
+ *   - <AppMenu />  → hamburguesa que abre Dashboard / Calendario / Housekeeping
+ *   - logo + nombre "Zenix" clickeable (vuelve al Dashboard)
+ *   - usuario activo + botón "Salir"
  *
- *   <MobileNav /> — Barra superior fija (h-14) visible solo en móvil (<lg).
- *                   Contiene un botón hamburguesa que abre un drawer lateral
- *                   con el mismo NavContent. El drawer se cierra automáticamente
- *                   al navegar (prop onNavigate).
- *
- * Ambos componentes renderizan <NavContent> internamente, que es donde vive
- * toda la lógica de navegación, usuario, logout y badges de alerta.
- *
- * Badge de discrepancias:
- *   NavContent hace polling a GET /discrepancies cada 60 segundos para calcular
- *   cuántas están en estado OPEN. Si hay alguna, aparece un círculo rojo con el
- *   número junto al ítem "Discrepancias" en el menú. Esto alerta al supervisor
- *   sin requerir que abra la página de discrepancias.
- *
- * Grupos de navegación:
- *   Principal    — Operaciones del día a día (Planificación, Tareas)
- *   Operaciones  — Checkouts, Discrepancias, Reportes
- *   Configuración — Gestión del hostel (solo supervisores usarán estas secciones)
+ * Esa misma UX está también embebida en <TimelineTopBar /> (la barra del
+ * endpoint /pms), para que el hamburguesa sea un punto único en todo el PMS.
  */
-import { useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/auth'
-import { api } from '../api/client'
-import type { BedDiscrepancyDto } from '@zenix/shared'
-import { DiscrepancyStatus } from '@zenix/shared'
-
-type NavItem = { to: string; icon: string; label: string }
-
-// Top-level PMS navigation.
-//   Principal     — Dashboard (landing) + Calendario (timeline de reservas /pms)
-//   Housekeeping  — hub operativo: planificación, tareas, checkouts, etc.
-//   Configuración — gestión del hostel (solo supervisores usarán estas secciones)
-//
-// 'Habitaciones' se eliminó del grupo Housekeeping: su funcionalidad (mapa en
-// tiempo real y checkout manual) fue absorbida por Planificación (pestaña
-// "Estado en Tiempo Real"). La ruta /rooms sigue existiendo pero no se expone.
-const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
-  {
-    title: 'Principal',
-    items: [
-      { to: '/dashboard', icon: '🏠', label: 'Dashboard' },
-      { to: '/pms',       icon: '📅', label: 'Calendario' },
-    ],
-  },
-  {
-    title: 'Housekeeping',
-    items: [
-      { to: '/planning',      icon: '📋', label: 'Planificación' },
-      { to: '/kanban',        icon: '🗂️', label: 'Tareas' },
-      { to: '/checkouts',     icon: '🚪', label: 'Checkouts' },
-      { to: '/discrepancies', icon: '⚠️', label: 'Discrepancias' },
-      { to: '/reports',       icon: '📊', label: 'Reportes' },
-    ],
-  },
-  {
-    title: 'Configuración',
-    items: [
-      { to: '/settings/rooms',    icon: '🛏️', label: 'Habitaciones' },
-      { to: '/settings/staff',    icon: '👥', label: 'Personal' },
-      { to: '/settings/property', icon: '⚙️', label: 'Propiedad' },
-    ],
-  },
-]
+import { AppMenu } from './AppMenu'
 
 /** Mapea los roles del backend a etiquetas legibles para el usuario */
 const ROLE_LABEL: Record<string, string> = {
-  SUPERVISOR: 'Supervisor', RECEPTIONIST: 'Recepción', HOUSEKEEPER: 'Housekeeping',
+  SUPERVISOR: 'Supervisor',
+  RECEPTIONIST: 'Recepción',
+  HOUSEKEEPER: 'Housekeeping',
 }
 
-// ─── Shared nav content ───────────────────────────────────────────────────────
-
-/**
- * NavContent — El contenido del menú compartido entre Sidebar y MobileNav.
- *
- * @param onNavigate  Callback que se invoca al hacer clic en un enlace.
- *                    En MobileNav se usa para cerrar el drawer.
- *                    En Sidebar desktop es undefined (no necesita cerrar nada).
- */
-function NavContent({ onNavigate }: { onNavigate?: () => void }) {
+function GlobalTopBar() {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
-
-  /**
-   * Polling ligero: cuenta las discrepancias OPEN para mostrar el badge rojo.
-   * Se reusan los datos ya cacheados si otra query también llama a /discrepancies.
-   * refetchInterval: 60s — balance entre actualidad y carga al servidor.
-   * La página DiscrepanciesPage usa SSE para actualizaciones instantáneas;
-   * este badge es solo una "alerta pasiva" mientras el supervisor está en otras pantallas.
-   */
-  const { data: openDiscrepancyCount = 0 } = useQuery<number>({
-    queryKey: ['discrepancies-open-count'],
-    queryFn: async () => {
-      const all = await api.get<BedDiscrepancyDto[]>('/discrepancies')
-      return all.filter((d) => d.status === DiscrepancyStatus.OPEN).length
-    },
-    refetchInterval: 60_000,
-  })
 
   function handleLogout() {
     logout()
@@ -111,116 +35,55 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Logo */}
-      <div className="px-4 py-5 border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <span className="text-xl">⚡</span>
-          <div>
-            <p className="text-sm font-semibold text-gray-900 leading-tight">Zenix</p>
-            <p className="text-xs text-gray-400 leading-tight">Property Management</p>
-          </div>
-        </div>
-      </div>
+    <div className="fixed top-0 left-0 right-0 z-30 flex items-center gap-3 px-4 h-14 bg-white border-b border-slate-200">
+      <AppMenu />
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.title}>
-            <p className="px-2 mb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">{group.title}</p>
-            <div className="space-y-0.5">
-              {group.items.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  onClick={onNavigate}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-                      isActive
-                        ? 'bg-indigo-50 text-indigo-700 font-medium'
-                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-                    }`
-                  }
-                >
-                  <span className="text-base leading-none shrink-0">{item.icon}</span>
-                  <span className="flex-1">{item.label}</span>
-                  {item.to === '/discrepancies' && openDiscrepancyCount > 0 && (
-                    <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 leading-none">
-                      {openDiscrepancyCount}
-                    </span>
-                  )}
-                </NavLink>
-              ))}
-            </div>
-          </div>
-        ))}
-      </nav>
+      <button
+        onClick={() => navigate('/dashboard')}
+        className="flex items-center gap-2 text-slate-800 hover:text-slate-600 transition-colors"
+        aria-label="Ir al dashboard"
+      >
+        <span className="text-lg leading-none">⚡</span>
+        <span className="text-sm font-semibold">Zenix</span>
+      </button>
 
-      {/* User footer */}
-      <div className="px-4 py-4 border-t border-gray-200">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-gray-800 truncate">{user?.name}</p>
-            <p className="text-xs text-gray-400">{ROLE_LABEL[user?.role ?? ''] ?? user?.role}</p>
+      <div className="flex-1" />
+
+      {user && (
+        <div className="flex items-center gap-3">
+          <div className="text-right min-w-0">
+            <p className="text-sm font-medium text-slate-800 truncate max-w-[140px]">
+              {user.name}
+            </p>
+            <p className="text-xs text-slate-400 leading-tight">
+              {ROLE_LABEL[user.role ?? ''] ?? user.role}
+            </p>
           </div>
           <button
             onClick={handleLogout}
-            className="text-xs text-gray-400 hover:text-red-500 transition-colors px-1 py-1 rounded shrink-0"
+            className="text-xs text-slate-400 hover:text-red-500 transition-colors px-2 py-1 rounded"
             title="Cerrar sesión"
           >
             Salir
           </button>
         </div>
-      </div>
+      )}
     </div>
   )
 }
 
-// ─── Desktop sidebar (fixed) ─────────────────────────────────────────────────
-
+/**
+ * Kept for backwards-compatibility with `ProtectedLayout` which imports
+ * both symbols. Both render the same single top bar now.
+ */
 export function Sidebar() {
-  return (
-    <aside className="hidden lg:flex flex-col w-64 min-h-screen bg-white border-r border-gray-200 fixed top-0 left-0 z-20">
-      <NavContent />
-    </aside>
-  )
+  return <GlobalTopBar />
 }
 
-// ─── Mobile top bar + drawer ─────────────────────────────────────────────────
-
 export function MobileNav() {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <>
-      {/* Top bar */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-30 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">⚡</span>
-          <span className="text-sm font-semibold text-gray-900">Zenix</span>
-        </div>
-        <button
-          onClick={() => setOpen(true)}
-          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
-          aria-label="Abrir menú"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Drawer overlay */}
-      {open && (
-        <div className="lg:hidden fixed inset-0 z-40 flex">
-          {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setOpen(false)} />
-          {/* Drawer */}
-          <div className="relative w-72 max-w-[85vw] bg-white h-full shadow-xl">
-            <NavContent onNavigate={() => setOpen(false)} />
-          </div>
-        </div>
-      )}
-    </>
-  )
+  // MobileNav existed to render the hamburger on mobile while Sidebar ran
+  // the desktop fixed column. With the new global top bar everything is
+  // unified, so this is now an empty peer — kept only so existing imports
+  // don't break.
+  return null
 }
