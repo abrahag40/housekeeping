@@ -26,14 +26,17 @@ import type {
   DropResult,
 } from '../../types/timeline.types'
 import { useRoomGroups } from '../../hooks/useRoomGroups'
+import { useAuthStore } from '@/store/auth'
 
 // ─── Component ──────────────────────────────────────────────
 
 export function TimelineScheduler() {
   const { dayWidth, sheetOpen, sheetStayId, openSheet, closeSheet } = useTimelineStore()
 
-  // TODO: Use real propertyId from tenant context when property selector is ready
-  const PROPERTY_ID = 'prop-hotel-tulum-001'
+  // Propiedad activa del usuario autenticado. Antes estaba hardcodeada
+  // ('prop-hotel-tulum-001') y causaba que el timeline quedara vacío en
+  // cualquier instalación que no fuera la del dev original.
+  const PROPERTY_ID = useAuthStore((s) => s.user?.propertyId) ?? ''
 
   const { data: apiGroups = [], isLoading: groupsLoading } = useRoomGroups(PROPERTY_ID)
 
