@@ -1,7 +1,13 @@
+import { usePropertyStore } from '../store/property'
+
 const BASE = import.meta.env.VITE_API_URL ?? ''
 
 function getToken(): string | null {
   return localStorage.getItem('hk_token')
+}
+
+function getActivePropertyId(): string | null {
+  return usePropertyStore.getState().activePropertyId
 }
 
 interface RequestOptions extends RequestInit {
@@ -19,6 +25,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (!skipAuth) {
     const token = getToken()
     if (token) headers.set('Authorization', `Bearer ${token}`)
+
+    const propertyId = getActivePropertyId()
+    if (propertyId) headers.set('X-Property-Id', propertyId)
   }
 
   const res = await fetch(`${BASE}/api${path}`, { ...init, headers })

@@ -14,6 +14,14 @@ import {
   TaskType,
 } from './enums'
 
+// ─── Property ────────────────────────────────────────────────────────────────
+
+export interface PropertyDto {
+  id: string
+  name: string
+  createdAt: string
+}
+
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 export interface JwtPayload {

@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common'
+import { CurrentUser } from '../common/decorators/current-user.decorator'
 import { Roles } from '../common/decorators/roles.decorator'
-import { HousekeepingRole } from '@housekeeping/shared'
+import { HousekeepingRole, JwtPayload } from '@housekeeping/shared'
 import { PropertiesService } from './properties.service'
 import { CreatePropertyDto } from './dto/create-property.dto'
 
@@ -17,6 +18,11 @@ export class PropertiesController {
   @Get()
   findAll() {
     return this.service.findAll()
+  }
+
+  @Get('mine')
+  findMine(@CurrentUser() actor: JwtPayload) {
+    return this.service.findMine(actor)
   }
 
   @Get(':id')

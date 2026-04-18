@@ -7,7 +7,8 @@ const prisma = new PrismaClient()
 async function main() {
   console.log('🌱 Seeding database...')
 
-  // Create a property
+  // Create properties (seed-property-1 is the main demo; seed-property-2 exists
+  // so the PropertySwitcher has something to switch to in a multi-property chain)
   const property = await prisma.property.upsert({
     where: { id: 'seed-property-1' },
     update: {},
@@ -16,7 +17,17 @@ async function main() {
       name: 'Hotel Demo',
     },
   })
-  console.log(`✅ Property: ${property.name}`)
+
+  await prisma.property.upsert({
+    where: { id: 'seed-property-2' },
+    update: {},
+    create: {
+      id: 'seed-property-2',
+      name: 'Hostal Centro',
+    },
+  })
+
+  console.log(`✅ Properties: Hotel Demo, Hostal Centro`)
 
   // Create shared dorm rooms (hostal-style)
   const dorm1 = await prisma.room.upsert({

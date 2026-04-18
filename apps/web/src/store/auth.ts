@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { AuthResponse } from '@housekeeping/shared'
+import { usePropertyStore } from './property'
 
 interface AuthState {
   token: string | null
@@ -20,6 +21,7 @@ export const useAuthStore = create<AuthState>()(
       },
       logout: () => {
         localStorage.removeItem('hk_token')
+        usePropertyStore.getState().reset()
         set({ token: null, user: null })
       },
     }),

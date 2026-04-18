@@ -1,36 +1,10 @@
-/**
- * Sidebar.tsx — Navegación principal de la aplicación
- *
- * Exports dos componentes que trabajan juntos para cubrir desktop y móvil:
- *
- *   <Sidebar />   — Sidebar fijo de 256px, visible solo en pantallas lg+.
- *                   Se monta una vez y nunca se desmonta.
- *
- *   <MobileNav /> — Barra superior fija (h-14) visible solo en móvil (<lg).
- *                   Contiene un botón hamburguesa que abre un drawer lateral
- *                   con el mismo NavContent. El drawer se cierra automáticamente
- *                   al navegar (prop onNavigate).
- *
- * Ambos componentes renderizan <NavContent> internamente, que es donde vive
- * toda la lógica de navegación, usuario, logout y badges de alerta.
- *
- * Badge de discrepancias:
- *   NavContent hace polling a GET /discrepancies cada 60 segundos para calcular
- *   cuántas están en estado OPEN. Si hay alguna, aparece un círculo rojo con el
- *   número junto al ítem "Discrepancias" en el menú. Esto alerta al supervisor
- *   sin requerir que abra la página de discrepancias.
- *
- * Grupos de navegación:
- *   Principal    — Operaciones del día a día (Planificación, Tareas)
- *   Operaciones  — Checkouts, Discrepancias, Reportes
- *   Configuración — Gestión del hostel (solo supervisores usarán estas secciones)
- */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/auth'
+import { usePropertyStore } from '../store/property'
 import { api } from '../api/client'
-import type { BedDiscrepancyDto } from '@housekeeping/shared'
+import type { BedDiscrepancyDto, PropertyDto } from '@housekeeping/shared'
 import { DiscrepancyStatus } from '@housekeeping/shared'
 
 type NavItem = { to: string; icon: string; label: string }
@@ -40,11 +14,6 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     title: 'Principal',
     items: [
       { to: '/planning', icon: '📋', label: 'Planificación' },
-      // 'Habitaciones' se eliminó de aquí: su funcionalidad (mapa en tiempo real
-      // y checkout manual) fue absorbida por el módulo de Planificación (pestaña
-      // "Estado en Tiempo Real"). Mantenerla como ítem separado generaba confusión
-      // y duplicación de pantallas. La ruta /rooms sigue existiendo pero no se
-      // expone en el menú.
       { to: '/kanban',   icon: '🗂️', label: 'Tareas' },
     ],
   },
@@ -66,31 +35,116 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   },
 ]
 
-/** Mapea los roles del backend a etiquetas legibles para el usuario */
 const ROLE_LABEL: Record<string, string> = {
   SUPERVISOR: 'Supervisor', RECEPTIONIST: 'Recepción', HOUSEKEEPER: 'Housekeeping',
 }
 
-// ─── Shared nav content ───────────────────────────────────────────────────────
+// ─── Property Switcher ────────────────────────────────────────────────────────
 
 /**
- * NavContent — El contenido del menú compartido entre Sidebar y MobileNav.
+ * Shows the active property name. If the user has access to more than one
+ * property (SUPERVISOR role), clicking opens a dropdown to switch context.
  *
- * @param onNavigate  Callback que se invoca al hacer clic en un enlace.
- *                    En MobileNav se usa para cerrar el drawer.
- *                    En Sidebar desktop es undefined (no necesita cerrar nada).
+ * On switch: updates usePropertyStore → api/client.ts picks up the new
+ * X-Property-Id header → qc.clear() flushes all React Query cache so every
+ * page refetches data scoped to the new property.
  */
+function PropertySwitcher({ onNavigate }: { onNavigate?: () => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const { user } = useAuthStore()
+  const { activePropertyId, setActiveProperty } = usePropertyStore()
+  const qc = useQueryClient()
+
+  const effectivePropertyId = activePropertyId ?? user?.propertyId
+
+  const { data: properties = [] } = useQuery<PropertyDto[]>({
+    queryKey: ['properties-mine'],
+    queryFn: () => api.get('/properties/mine'),
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const activeProperty = properties.find((p) => p.id === effectivePropertyId) ?? properties[0]
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return
+    function handleOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [open])
+
+  function handleSwitch(id: string, name: string) {
+    setActiveProperty(id, name)
+    qc.clear()
+    setOpen(false)
+    onNavigate?.()
+  }
+
+  const multiProperty = properties.length > 1
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => multiProperty && setOpen((o) => !o)}
+        className={`flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-left transition-colors ${
+          multiProperty
+            ? 'hover:bg-gray-100 cursor-pointer'
+            : 'cursor-default'
+        }`}
+        title={multiProperty ? 'Cambiar sucursal' : undefined}
+      >
+        <span className="text-sm shrink-0">🏢</span>
+        <span className="flex-1 text-sm font-medium text-gray-800 truncate">
+          {activeProperty?.name ?? '—'}
+        </span>
+        {multiProperty && (
+          <svg
+            className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+          {properties.map((p) => {
+            const isActive = p.id === effectivePropertyId
+            return (
+              <button
+                key={p.id}
+                onClick={() => handleSwitch(p.id, p.name)}
+                className={`flex items-center gap-2 w-full px-3 py-2.5 text-sm text-left transition-colors ${
+                  isActive
+                    ? 'bg-indigo-50 text-indigo-700 font-medium'
+                    : 'text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span className={`w-4 text-center text-indigo-600 ${isActive ? '' : 'invisible'}`}>
+                  ✓
+                </span>
+                <span>{p.name}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Shared nav content ───────────────────────────────────────────────────────
+
 function NavContent({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
 
-  /**
-   * Polling ligero: cuenta las discrepancias OPEN para mostrar el badge rojo.
-   * Se reusan los datos ya cacheados si otra query también llama a /discrepancies.
-   * refetchInterval: 60s — balance entre actualidad y carga al servidor.
-   * La página DiscrepanciesPage usa SSE para actualizaciones instantáneas;
-   * este badge es solo una "alerta pasiva" mientras el supervisor está en otras pantallas.
-   */
   const { data: openDiscrepancyCount = 0 } = useQuery<number>({
     queryKey: ['discrepancies-open-count'],
     queryFn: async () => {
@@ -107,8 +161,8 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Logo */}
-      <div className="px-4 py-5 border-b border-gray-200">
+      {/* Logo + Property Switcher */}
+      <div className="px-4 pt-5 pb-3 border-b border-gray-200 space-y-3">
         <div className="flex items-center gap-2">
           <span className="text-xl">🏠</span>
           <div>
@@ -116,6 +170,7 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
             <p className="text-xs text-gray-400 leading-tight">Sistema de limpieza</p>
           </div>
         </div>
+        <PropertySwitcher onNavigate={onNavigate} />
       </div>
 
       {/* Navigation */}
@@ -185,6 +240,7 @@ export function Sidebar() {
 
 export function MobileNav() {
   const [open, setOpen] = useState(false)
+  const { activePropertyName } = usePropertyStore()
 
   return (
     <>
@@ -192,7 +248,9 @@ export function MobileNav() {
       <div className="lg:hidden fixed top-0 left-0 right-0 z-30 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
         <div className="flex items-center gap-2">
           <span className="text-lg">🏠</span>
-          <span className="text-sm font-semibold text-gray-900">Housekeeping</span>
+          <span className="text-sm font-semibold text-gray-900">
+            {activePropertyName ?? 'Housekeeping'}
+          </span>
         </div>
         <button
           onClick={() => setOpen(true)}
