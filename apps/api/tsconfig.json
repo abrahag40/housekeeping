@@ -22,10 +22,5 @@
     }
   },
   "include": ["src/**/*", "prisma/**/*"],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/pms/room-readiness/**",
-    "src/pms/stay-journeys/**"
-  ]
+  "exclude": ["node_modules", "dist"]
 }

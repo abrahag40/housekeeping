@@ -177,6 +177,9 @@ model Organization {
   roomTypes         RoomType[]
   roomStatusLogs    RoomStatusLog[]
   guestStays        GuestStay[]
+  roomTypeChecklists RoomTypeChecklist[]
+  roomReadinessTasks RoomReadinessTask[]
+  stayJourneys       StayJourney[]
 
   @@map("organizations")
 }
@@ -239,6 +242,7 @@ model Property {
   pmsConfig    PmsConfig?
   settings     PropertySettings?
   userRoles    UserPropertyRole[]
+  stayJourneys StayJourney[]
 
   @@index([organizationId])
   @@map("properties")
@@ -266,6 +270,8 @@ model Room {
   checkouts    Checkout[]
   statusLogs   RoomStatusLog[]
   guestStays   GuestStay[]
+  readinessTasks RoomReadinessTask[]
+  staySegments StaySegment[]
 
   @@unique([propertyId, number])
   @@index([organizationId])
@@ -599,10 +605,247 @@ model GuestStay {
 
   organization Organization @relation(fields: [organizationId], references: [id])
   room         Room         @relation(fields: [roomId], references: [id])
+  stayJourney  StayJourney?
+  staySegments StaySegment[]
 
   @@index([organizationId])
   @@index([organizationId, propertyId])
   @@index([roomId])
   @@index([paymentStatus])
   @@map("guest_stays")
+}
+
+// ===================== PRE-CHECKIN QUALITY SYSTEM =====================
+//
+// Restaurado desde migration 20260402192948_add_pre_checkin_quality_system.
+// Workflow: al hacer checkout de un huésped (OnEvent 'checkout.confirmed'),
+// se crea automáticamente un RoomReadinessTask con items copiados del
+// RoomTypeChecklist activo para la propiedad. Housekeeping los marca (PENDING
+// → DONE | ISSUE_FOUND | SKIPPED) antes del siguiente check-in.
+
+enum ReadinessStatus {
+  PENDING
+  IN_PROGRESS
+  NEEDS_MAINTENANCE
+  READY
+  APPROVED
+}
+
+enum ItemStatus {
+  PENDING
+  DONE
+  ISSUE_FOUND
+  SKIPPED
+}
+
+model RoomTypeChecklist {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  propertyId     String   @map("property_id")
+  roomTypeId     String?  @map("room_type_id")
+  name           String
+  triggerOn      String   @default("checkout")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization   Organization       @relation(fields: [organizationId], references: [id])
+  items          ChecklistItem[]
+  readinessTasks RoomReadinessTask[]
+
+  @@index([organizationId])
+  @@index([organizationId, propertyId])
+  @@map("room_type_checklists")
+}
+
+model ChecklistItem {
+  id            String   @id @default(uuid())
+  checklistId   String   @map("checklist_id")
+  category      String
+  description   String
+  isRequired    Boolean  @default(true) @map("is_required")
+  requiresPhoto Boolean  @default(false) @map("requires_photo")
+  sortOrder     Int      @default(0) @map("sort_order")
+
+  checklist  RoomTypeChecklist       @relation(fields: [checklistId], references: [id])
+  taskItems  RoomReadinessTaskItem[]
+
+  @@index([checklistId])
+  @@map("checklist_items")
+}
+
+model RoomReadinessTask {
+  id             String          @id @default(uuid())
+  organizationId String          @map("organization_id")
+  propertyId     String          @map("property_id")
+  roomId         String          @map("room_id")
+  checklistId    String          @map("checklist_id")
+  assignedToId   String?         @map("assigned_to_id")
+  triggeredBy    String          @map("triggered_by")
+  status         ReadinessStatus @default(PENDING)
+  dueBy          DateTime?       @map("due_by")
+  approvedById   String?         @map("approved_by_id")
+  approvedAt     DateTime?       @map("approved_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization            @relation(fields: [organizationId], references: [id])
+  room         Room                    @relation(fields: [roomId], references: [id])
+  checklist    RoomTypeChecklist       @relation(fields: [checklistId], references: [id])
+  items        RoomReadinessTaskItem[]
+
+  @@index([organizationId])
+  @@index([roomId, status])
+  @@map("room_readiness_tasks")
+}
+
+model RoomReadinessTaskItem {
+  id                   String     @id @default(uuid())
+  taskId               String     @map("task_id")
+  checklistItemId      String     @map("checklist_item_id")
+  status               ItemStatus @default(PENDING)
+  completedById        String?    @map("completed_by_id")
+  completedAt          DateTime?  @map("completed_at")
+  photoUrl             String?    @map("photo_url")
+  notes                String?
+  maintenanceTicketId  String?    @map("maintenance_ticket_id")
+
+  task          RoomReadinessTask @relation(fields: [taskId], references: [id])
+  checklistItem ChecklistItem     @relation(fields: [checklistItemId], references: [id])
+
+  @@index([taskId])
+  @@map("room_readiness_task_items")
+}
+
+// ======================== STAY JOURNEY MODEL =========================
+//
+// Restaurado desde migration 20260410000000_add_stay_journey_model.
+// Modela una estadía completa como journey + segmentos (permite extensiones
+// y mudanzas de habitación) + nights (ingresos diarios para reporting).
+
+enum StayJourneyStatus {
+  ACTIVE
+  CHECKED_OUT
+  CANCELLED
+
+  @@map("stay_journey_status")
+}
+
+enum SegmentStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+
+  @@map("segment_status")
+}
+
+enum SegmentReason {
+  ORIGINAL
+  EXTENSION_SAME_ROOM
+  EXTENSION_NEW_ROOM
+  ROOM_MOVE
+
+  @@map("segment_reason")
+}
+
+enum NightStatus {
+  PENDING
+  POSTED
+  LOCKED
+
+  @@map("night_status")
+}
+
+enum JourneyEventType {
+  JOURNEY_CREATED
+  SEGMENT_ADDED
+  SEGMENT_LOCKED
+  ROOM_MOVE_EXECUTED
+  EXTENSION_APPROVED
+  CHECKED_OUT
+  CANCELLED
+
+  @@map("journey_event_type")
+}
+
+model StayJourney {
+  id              String            @id @default(uuid())
+  organizationId  String            @map("organization_id")
+  propertyId      String            @map("property_id")
+  guestStayId     String?           @unique @map("guest_stay_id")
+  guestName       String            @map("guest_name")
+  guestEmail      String?           @map("guest_email")
+  status          StayJourneyStatus @default(ACTIVE)
+  journeyCheckIn  DateTime          @map("journey_check_in")
+  journeyCheckOut DateTime          @map("journey_check_out")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  organization Organization       @relation(fields: [organizationId], references: [id])
+  property     Property           @relation(fields: [propertyId], references: [id])
+  guestStay    GuestStay?         @relation(fields: [guestStayId], references: [id])
+  segments     StaySegment[]
+  events       StayJourneyEvent[]
+
+  @@index([organizationId, status])
+  @@index([propertyId, journeyCheckIn, journeyCheckOut])
+  @@map("stay_journeys")
+}
+
+model StaySegment {
+  id           String        @id @default(uuid())
+  journeyId    String        @map("journey_id")
+  roomId       String        @map("room_id")
+  guestStayId  String?       @map("guest_stay_id")
+  checkIn      DateTime      @map("check_in")
+  checkOut     DateTime      @map("check_out")
+  status       SegmentStatus @default(PENDING)
+  locked       Boolean       @default(false)
+  reason       SegmentReason @default(ORIGINAL)
+  rateSnapshot Decimal?      @map("rate_snapshot") @db.Decimal(10, 2)
+  notes        String?
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  journey   StayJourney    @relation(fields: [journeyId], references: [id])
+  room      Room           @relation(fields: [roomId], references: [id])
+  guestStay GuestStay?     @relation(fields: [guestStayId], references: [id])
+  nights    SegmentNight[]
+
+  @@index([journeyId])
+  @@index([roomId, checkIn, checkOut])
+  @@index([status, locked])
+  @@map("stay_segments")
+}
+
+model SegmentNight {
+  id        String      @id @default(uuid())
+  segmentId String      @map("segment_id")
+  date      DateTime    @db.Date
+  rate      Decimal     @db.Decimal(10, 2)
+  status    NightStatus @default(PENDING)
+  locked    Boolean     @default(false)
+
+  segment StaySegment @relation(fields: [segmentId], references: [id])
+
+  @@unique([segmentId, date])
+  @@index([date])
+  @@index([segmentId, locked])
+  @@map("segment_nights")
+}
+
+model StayJourneyEvent {
+  id         String           @id @default(uuid())
+  journeyId  String           @map("journey_id")
+  eventType  JourneyEventType @map("event_type")
+  actorId    String?          @map("actor_id")
+  payload    Json
+  occurredAt DateTime         @default(now()) @map("occurred_at")
+
+  journey StayJourney @relation(fields: [journeyId], references: [id])
+
+  @@index([journeyId, occurredAt])
+  @@index([eventType, occurredAt])
+  @@map("stay_journey_events")
 }

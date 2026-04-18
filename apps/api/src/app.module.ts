@@ -2,6 +2,7 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common'
 import { APP_GUARD } from '@nestjs/core'
 import { ConfigModule } from '@nestjs/config'
 import { EventEmitterModule } from '@nestjs/event-emitter'
+import { ScheduleModule } from '@nestjs/schedule'
 import { ClsModule, ClsMiddleware } from 'nestjs-cls'
 import configuration from './config/configuration'
 import { PrismaModule } from './prisma/prisma.module'
@@ -19,18 +20,13 @@ import { CloudbedsModule } from './integrations/cloudbeds/cloudbeds.module'
 import { SettingsModule } from './settings/settings.module'
 import { DiscrepanciesModule } from './discrepancies/discrepancies.module'
 import { ReportsModule } from './reports/reports.module'
-// Módulos deshabilitados temporalmente — requieren modelos Prisma ausentes del
-// schema actual (StayJourney, StaySegment, RoomReadinessTask, Checklist) y
-// `@nestjs/schedule` no instalado. Re-habilitar cuando se restauren los modelos
-// al schema y se instalen deps.
-// import { RoomReadinessModule } from './pms/room-readiness/room-readiness.module'
-// import { StayJourneysModule } from './pms/stay-journeys/stay-journeys.module'
-//
-// EmailModule fue stubbed (sin @nestjs-modules/mailer): sigue activo y expone
-// el mismo EmailService para no romper el grafo de inyección de GuestStays.
+// EmailModule fue stubbed temporalmente (sin @nestjs-modules/mailer). Sigue
+// activo y expone EmailService con envío no-op hasta que se configure SMTP.
 import { EmailModule } from './common/email/email.module'
 import { GuestStaysModule } from './pms/guest-stays/guest-stays.module'
+import { RoomReadinessModule } from './pms/room-readiness/room-readiness.module'
 import { RoomTypesModule } from './pms/room-types/room-types.module'
+import { StayJourneysModule } from './pms/stay-journeys/stay-journeys.module'
 import { DashboardModule } from './dashboard/dashboard.module'
 import { TenantContextMiddleware } from './common/tenant-context.middleware'
 import { TenantContextService } from './common/tenant-context.service'
@@ -48,6 +44,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
       middleware: { mount: false },
     }),
     EventEmitterModule.forRoot(),
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
     PropertiesModule,
@@ -65,9 +62,9 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
     ReportsModule,
     EmailModule,            // stubbed — ver comentario arriba
     GuestStaysModule,
-    // RoomReadinessModule, // deshabilitado — falta modelos Prisma + @nestjs/schedule
+    RoomReadinessModule,
     RoomTypesModule,
-    // StayJourneysModule,  // deshabilitado — falta modelos Prisma (StayJourney, StaySegment)
+    StayJourneysModule,
     DashboardModule,
   ],
   providers: [
