@@ -29,25 +29,28 @@ export function useTooltip(options?: { forceAbove?: boolean }) {
     const rect = el.getBoundingClientRect()
     const { x: mouseX } = mousePosRef.current
 
-    // Always place tooltip above the block. TooltipPortal applies translateY(-100%)
-    // so the tooltip BOTTOM aligns with `y`. Anchoring to rect.top means the tooltip
-    // bottom sits just above the block's top edge — it never covers the block itself
-    // or adjacent rows below it.
-    const placement = 'top'
+    // Flip to 'bottom' when there is not enough space above the block.
+    // 280px covers the tallest tooltip variant (with no-show action panel).
+    // forceAbove bypasses the flip for non-last journey segments where the
+    // next segment block sits immediately below and would be obscured.
+    const TOOLTIP_MIN_TOP = 280
+    const placement: 'top' | 'bottom' =
+      forceAbove || rect.top >= TOOLTIP_MIN_TOP ? 'top' : 'bottom'
 
     // Clamp horizontally so the tooltip (256px wide + padding) stays in view.
     const TOOLTIP_HALF = 144
     const clampedX = Math.max(TOOLTIP_HALF, Math.min(mouseX, window.innerWidth - TOOLTIP_HALF))
 
-    // Tooltip bottom = block top − 4px gap.
-    const y = rect.top - 4
+    // top → tooltip bottom aligns with block top − 8px gap (translateY(-100%) in portal)
+    // bottom → tooltip top aligns with block bottom + 8px gap (translateY(0) in portal)
+    const y = placement === 'top' ? rect.top - 8 : rect.bottom + 8
 
     setPosition({
       x: clampedX,
       y,
       placement,
     })
-  }, [])
+  }, [forceAbove])
 
   const scheduleHide = useCallback(() => {
     clearTimeout(hideTimerRef.current)

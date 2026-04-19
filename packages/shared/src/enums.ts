@@ -101,6 +101,37 @@ export enum PmsMode {
   CONNECTED = 'CONNECTED',
 }
 
+// ─── No-Show ──────────────────────────────────────────────────────────────────
+
+export enum NoShowChargeStatus {
+  NOT_APPLICABLE = 'NOT_APPLICABLE', // tarifa sin cargo (policy = NONE)
+  PENDING        = 'PENDING',        // registrado, pendiente de cobro
+  CHARGED        = 'CHARGED',        // cobrado exitosamente
+  FAILED         = 'FAILED',         // tarjeta rechazada, requiere acción manual
+  WAIVED         = 'WAIVED',         // exonerado por supervisor
+}
+
+// ─── Stay Journey ─────────────────────────────────────────────────────────────
+
+export enum StayJourneyStatus {
+  ACTIVE      = 'ACTIVE',
+  CHECKED_OUT = 'CHECKED_OUT',
+  CANCELLED   = 'CANCELLED',
+  NO_SHOW     = 'NO_SHOW',
+}
+
+export enum JourneyEventType {
+  JOURNEY_CREATED    = 'JOURNEY_CREATED',
+  SEGMENT_ADDED      = 'SEGMENT_ADDED',
+  SEGMENT_LOCKED     = 'SEGMENT_LOCKED',
+  ROOM_MOVE_EXECUTED = 'ROOM_MOVE_EXECUTED',
+  EXTENSION_APPROVED = 'EXTENSION_APPROVED',
+  CHECKED_OUT        = 'CHECKED_OUT',
+  CANCELLED          = 'CANCELLED',
+  NO_SHOW_MARKED     = 'NO_SHOW_MARKED',
+  NO_SHOW_REVERTED   = 'NO_SHOW_REVERTED',
+}
+
 // ─── SmartBlock ───────────────────────────────────────────────────────────────
 
 /**

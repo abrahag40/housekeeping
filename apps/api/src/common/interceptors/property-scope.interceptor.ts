@@ -1,6 +1,6 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common'
 import { Observable } from 'rxjs'
-import { HousekeepingRole, JwtPayload } from '@housekeeping/shared'
+import { HousekeepingRole, JwtPayload } from '@zenix/shared'
 
 /**
  * Allows SUPERVISOR users to switch the active property context at runtime

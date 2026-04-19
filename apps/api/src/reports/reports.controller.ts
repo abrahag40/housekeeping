@@ -44,4 +44,24 @@ export class ReportsController {
   ) {
     return this.service.getDailyTrend(user.propertyId, from ?? daysAgo(6), to ?? toYMD(new Date()))
   }
+
+  /**
+   * GET /reports/no-shows?from=YYYY-MM-DD&to=YYYY-MM-DD
+   *
+   * Reporte de auditoría de no-shows con KPIs de ingresos y distribución por canal.
+   * Filtros: rango de fechas por noShowAt (cuándo se marcó, no cuándo fue la llegada).
+   * Default: últimos 30 días.
+   */
+  @Get('no-shows')
+  noShowReport(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.service.getNoShowReport(
+      user.propertyId,
+      from ?? daysAgo(29),
+      to  ?? toYMD(new Date()),
+    )
+  }
 }

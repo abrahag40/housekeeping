@@ -53,8 +53,8 @@ type NavGroup = {
 type NavItem = NavLeaf | NavGroup
 
 const NAV: NavItem[] = [
-  { kind: 'leaf',  to: '/dashboard', icon: '🏠', label: 'Panel' },
-  { kind: 'leaf',  to: '/pms',       icon: '📅', label: 'Calendario' },
+  { kind: 'leaf', to: '/dashboard', icon: '🏠', label: 'Panel' },
+  { kind: 'leaf', to: '/pms',       icon: '📅', label: 'Calendario' },
   {
     kind: 'group',
     icon: '🧹',
@@ -66,10 +66,10 @@ const NAV: NavItem[] = [
       { to: '/checkouts',     icon: '🚪', label: 'Checkouts' },
       { to: '/discrepancies', icon: '⚠️', label: 'Discrepancias', showDiscrepancyBadge: true },
       { to: '/blocks',        icon: '🔒', label: 'Bloqueos' },
-      { to: '/reports',       icon: '📊', label: 'Reportes' },
     ],
   },
-  { kind: 'leaf',  to: '/settings/rooms', icon: '⚙️', label: 'Configuración' },
+  { kind: 'leaf', to: '/reports',       icon: '📊', label: 'Reportes' },
+  { kind: 'leaf', to: '/settings/rooms', icon: '⚙️', label: 'Configuración' },
 ]
 
 function NavRow({
@@ -188,6 +188,7 @@ export function AppDrawer() {
 
       <SheetContent
         side="left"
+        showCloseButton={false}
         className="w-80 p-0 flex flex-col"
       >
         {/* Header — matches the Cloudbeds reference: close button at the

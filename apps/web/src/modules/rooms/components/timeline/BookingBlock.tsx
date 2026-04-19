@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react'
-import { Lock, Unlock, LogOut } from 'lucide-react'
+import { Lock, Unlock, LogOut, UserX } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { STAY_STATUS_COLORS, OTA_ACCENT_COLORS, TIMELINE } from '../../utils/timeline.constants'
 import type { StayStatusKey } from '../../utils/timeline.constants'
@@ -18,6 +18,7 @@ interface BookingBlockProps {
   onDragStart: (stayId: string, clientX: number, clientY: number) => void
   onClick: () => void
   onCheckout?: (stayId: string) => void
+  onNoShow?: (stayId: string) => void
   isDragging?: boolean
   isLocked?: boolean
   onToggleLock?: (stayId: string) => void
@@ -46,6 +47,7 @@ export function BookingBlock({
   onDragStart,
   onClick,
   onCheckout,
+  onNoShow,
   isDragging = false,
   isLocked = false,
   onToggleLock,
@@ -86,6 +88,8 @@ export function BookingBlock({
 
   const stayStatus = getStayStatus(stay.checkIn, stay.checkOut, stay.actualCheckout)
   const isDeparting = stayStatus === 'DEPARTING'
+  // IN_HOUSE without noShowAt = guest was expected but hasn't been marked no-show yet
+  const isPotentialNoShow = stayStatus === 'IN_HOUSE' && !stay.noShowAt
   const colors = STAY_STATUS_COLORS[stayStatus as StayStatusKey]
   const otaAccent = OTA_ACCENT_COLORS[stay.source] ?? OTA_ACCENT_COLORS.other
   const isCompact = dayWidth <= 20
@@ -110,6 +114,9 @@ export function BookingBlock({
       : rect.width <= 80
       ? `${firstName} ${lastInitial}.`
       : stay.guestName
+
+  // Departed stays are read-only — no drag, no lock, no actions
+  const isPast = stayStatus === 'DEPARTED'
 
   // Segment-derived style flags
   const isSegmentLocked = stay.segmentLocked === true
@@ -136,6 +143,16 @@ export function BookingBlock({
     if (e.button !== 0 || e.ctrlKey || e.metaKey) return
     e.preventDefault()
     e.stopPropagation()
+
+    // Past stays are read-only: allow click to open details, no drag
+    if (isPast) {
+      function handleMouseUpPast() {
+        window.removeEventListener('mouseup', handleMouseUpPast)
+        onClick()
+      }
+      window.addEventListener('mouseup', handleMouseUpPast)
+      return
+    }
 
     mouseDownPos.current = { x: e.clientX, y: e.clientY }
     didDrag.current = false
@@ -184,7 +201,7 @@ export function BookingBlock({
           !isDragging && 'hover:shadow-[0_4px_8px_rgba(0,0,0,0.12),0_8px_16px_rgba(0,0,0,0.08)]',
           !isDragging && 'hover:z-10',
           !isDragging && 'active:scale-[0.995] active:shadow-none',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500',
           'opacity-0 animate-fade-in',
         )}
         style={{
@@ -204,7 +221,7 @@ export function BookingBlock({
             : isSegmentLocked || stayStatus === 'DEPARTED'
             ? 0.72
             : 1,
-          cursor: isLocked || isSegmentLocked ? 'default' : isDragging ? 'grabbing' : 'grab',
+          cursor: isPast || isLocked || isSegmentLocked ? 'default' : isDragging ? 'grabbing' : 'grab',
           borderRight: lastSegmentBorder,
           animationFillMode: 'forwards',
           animationDelay: `${staggerIndex * 20}ms`,
@@ -288,11 +305,6 @@ export function BookingBlock({
             className="h-full flex items-center gap-1.5 overflow-hidden"
             style={{ paddingLeft: 8, paddingRight: 8 }}
           >
-            {showEdgeLabels && (
-              <span className="text-[8px] font-bold uppercase opacity-30 shrink-0 leading-none">
-                IN
-              </span>
-            )}
             {showDot ? (
               <div style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: dotColor, flexShrink: 0 }} />
             ) : (
@@ -328,8 +340,24 @@ export function BookingBlock({
                   OUT
                 </button>
               )}
-              {/* Lock toggle */}
-              {!isDragging && !isSegmentLocked && (
+              {/* POTENTIAL NO-SHOW — badge NS con pulsing dot */}
+              {isPotentialNoShow && rect.width > 70 && !isDragging && !isSegmentLocked && (
+                <div
+                  className="relative flex items-center shrink-0"
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <span
+                    className="inline-flex items-center gap-0.5 font-bold"
+                    style={{ backgroundColor: '#FED7AA', color: '#9A3412', fontSize: 9, padding: '1px 5px', borderRadius: 3, lineHeight: 1.5 }}
+                  >
+                    <UserX style={{ width: 8, height: 8 }} />
+                    NS
+                  </span>
+                  <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
+                </div>
+              )}
+              {/* Lock toggle — hidden for past stays */}
+              {!isPast && !isDragging && !isSegmentLocked && (
                 <div
                   className={cn(
                     'p-0.5 rounded hover:bg-black/10 transition-opacity duration-150',
@@ -347,18 +375,20 @@ export function BookingBlock({
                   }
                 </div>
               )}
-              {showEdgeLabels && (
-                <span className="text-[8px] font-bold uppercase opacity-30 leading-none">
-                  OUT
-                </span>
-              )}
             </div>
           </div>
         )}
 
       </div>
 
-      <TooltipPortal stay={stay} position={position} visible={visible} registerTooltipRef={registerTooltipRef} />
+      <TooltipPortal
+        stay={stay}
+        position={position}
+        visible={visible}
+        registerTooltipRef={registerTooltipRef}
+        onNoShow={onNoShow ? (stayId) => { hide(); onNoShow(stayId) } : undefined}
+        isPotentialNoShow={isPotentialNoShow}
+      />
     </>
   )
 }

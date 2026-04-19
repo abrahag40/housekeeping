@@ -72,9 +72,6 @@ export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, rea
                     ))}
                   </div>
 
-                  <span className="text-[10px] text-slate-400 font-mono shrink-0">
-                    USD {group.baseRate}
-                  </span>
                 </button>
               )
             }

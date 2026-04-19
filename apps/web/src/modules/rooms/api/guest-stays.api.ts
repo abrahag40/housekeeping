@@ -40,6 +40,9 @@ export const guestStaysApi = {
     notes?: string
   }) => api.post<Record<string, unknown>>(BASE, data),
 
+  get: (stayId: string) =>
+    api.get<Record<string, unknown>>(`${BASE}/${stayId}`),
+
   checkout: (stayId: string) =>
     api.post(`${BASE}/${stayId}/checkout`, {}),
 

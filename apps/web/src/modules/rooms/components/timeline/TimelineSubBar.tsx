@@ -10,7 +10,6 @@ import type { ViewMode } from '../../types/timeline.types'
 const VIEW_OPTIONS: { mode: ViewMode; label: string }[] = [
   { mode: 'week', label: 'Semana' },
   { mode: 'month', label: 'Mes' },
-  { mode: 'quarter', label: 'Trimestre' },
 ]
 
 interface TimelineSubBarProps {

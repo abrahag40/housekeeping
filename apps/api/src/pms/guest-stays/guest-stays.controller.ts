@@ -8,6 +8,17 @@ import {
   Body,
   Query,
 } from '@nestjs/common'
+import { IsBoolean, IsOptional, IsString } from 'class-validator'
+
+class MarkNoShowDto {
+  @IsOptional()
+  @IsString()
+  reason?: string
+
+  @IsOptional()
+  @IsBoolean()
+  waiveCharge?: boolean
+}
 import { GuestStaysService } from './guest-stays.service'
 import { CreateGuestStayDto } from './dto/create-guest-stay.dto'
 import { MoveRoomDto } from './dto/move-room.dto'
@@ -52,6 +63,11 @@ export class GuestStaysController {
     return this.service.checkAvailability(roomId, ciDate, coDate)
   }
 
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.service.findOne(id)
+  }
+
   @Get()
   findByProperty(
     @Query('propertyId') propertyId: string,
@@ -77,5 +93,33 @@ export class GuestStaysController {
     @CurrentUser() actor: JwtPayload,
   ) {
     return this.service.moveRoom(id, dto, actor.sub)
+  }
+
+  /**
+   * POST /v1/guest-stays/:id/no-show
+   * Marca manualmente una estadía como no-show.
+   * El recepcionista puede exonerar el cargo con waiveCharge: true
+   * (requiere rol SUPERVISOR — validación en frontend; el servicio registra quién lo hizo).
+   */
+  @Post(':id/no-show')
+  markAsNoShow(
+    @Param('id') id: string,
+    @Body() dto: MarkNoShowDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.markAsNoShow(id, actor.sub, dto)
+  }
+
+  /**
+   * POST /v1/guest-stays/:id/revert-no-show
+   * Revierte el no-show dentro de la ventana de 48h.
+   * Útil para: vuelo retrasado, llegada tardía, error del recepcionista.
+   */
+  @Post(':id/revert-no-show')
+  revertNoShow(
+    @Param('id') id: string,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.revertNoShow(id, actor.sub)
   }
 }

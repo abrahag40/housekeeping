@@ -1,7 +1,7 @@
 # CLAUDE.md — Housekeeping Management System
 
 > Guía para retomar el proyecto desde cero. Lee esto antes de tocar código.
-> Última actualización: 2026-03-22 (Sesión 4 — Etapa 1 consolidada + roadmap Etapa 2).
+> Última actualización: 2026-04-19 (Sesión 6 — PMS Calendar UX polish, NoShowConfirmModal, ReservationDetailPage, GlobalTopBar).
 
 ---
 
@@ -14,6 +14,8 @@ Sistema de gestión de housekeeping para hostales/hoteles con dormitorios compar
 - **Checkout de 2 fases** — planificación AM + confirmación física. Ningún competidor lo tiene.
 - **Offline mobile con cola de sync** — ningún PMS soporta operación offline.
 - **SSE en tiempo real** — al nivel de los PMS premium (Mews, Opera, Clock PMS+).
+- **Auditoría fiscal-grade de no-shows** — trail inmutable, ventana de reversión de 48h, cargos traceables. Opera/Cloudbeds no tienen revert auditado; Mews tiene revert pero sin cumplimiento fiscal LATAM.
+- **Night audit multi-timezone** — scheduler per-propiedad usando IANA timezone. Un cliente con hoteles en México, Colombia y España recibe el corte en la hora local correcta de cada propiedad. Ningún PMS entry-level resuelve esto.
 
 ---
 
@@ -261,6 +263,141 @@ const dayEnd   = new Date(`${date}T23:59:59.999Z`)
 ### 13. UX — texto mínimo, optimizar para uso diario
 **Decisión (basada en NNGroup, Tufte, Krug, Apple HIG):** La interfaz se optimiza para la 100ª sesión, no la 1ª. Sin leyendas permanentes, sin hints persistentes, sin banners instructivos. Los chips de cama son auto-explicativos por color y acción inline. El banner post-confirmación es de 1 línea.
 
+### 14. Night audit multi-timezone — `Intl.DateTimeFormat` por propiedad
+**Problema:** Un PMS distribuido puede tener propiedades en múltiples países/regiones. Hardcodear `America/Mexico_City` en el cron job rompe el corte nocturno para propiedades en España, Colombia, Perú, etc.
+**Decisión:** El scheduler `NightAuditScheduler` corre cada 30 minutos (`@Cron('0,30 * * * *')`). Por cada propiedad, evalúa la hora local usando su timezone configurado en `PropertySettings.timezone`. Usa exclusivamente `Intl.DateTimeFormat` (Node.js nativo, sin deps externas):
+```typescript
+function toLocalDate(date: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(date)
+}
+function toLocalHour(date: Date, timezone: string): number {
+  const h = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, hour: 'numeric', hour12: false
+  }).format(date)
+  return Number(h) % 24  // normaliza "24" → 0 (medianoche)
+}
+```
+**Archivo:** `apps/api/src/pms/guest-stays/night-audit.scheduler.ts`
+**NUNCA** usar `new Date().toLocaleDateString()` sin timezone explícito. Siempre pasar el timezone de la propiedad.
+
+### 15. Idempotencia del night audit — `noShowProcessedDate`
+**Problema:** El cron corre cada 30 min. Sin guardia, procesaría no-shows múltiples veces en el mismo día local.
+**Decisión:** `PropertySettings.noShowProcessedDate DateTime? @db.Date` actúa como semáforo. El scheduler solo procesa si `localDate !== noShowProcessedDate`. Después de procesar, actualiza `noShowProcessedDate = localDate`. Si el servidor se reinicia o el cron dispara en minutos consecutivos, la segunda ejecución es no-op.
+
+### 16. Ventana de reversión de no-show — 48 horas
+**Problema:** Los errores operacionales ocurren: un recepcionista marca no-show por error o el huésped llega tarde. Se necesita recovery sin comprometer el audit trail.
+**Decisión:** Ventana de 48h desde `noShowAt` para revertir. Después de 48h el registro es inmutable desde el sistema (solo admin-level puede modificar via BD). Este patrón sigue el estándar ISAHC y es consistente con Mews y Clock PMS+.
+**Guard en código:**
+```typescript
+const hoursElapsed = differenceInHours(new Date(), stay.noShowAt)
+if (hoursElapsed > 48) throw new ForbiddenException('Ventana de reversión expirada (48h)')
+```
+La reversión restaura `noShowAt: null`, `noShowChargeStatus: null`, libera el cuarto a `OCCUPIED`.
+
+### 17. Liberación de inventario en no-show
+**Problema:** `checkAvailability` filtraba `actualCheckout: null` para detectar ocupación. Un no-show sin `actualCheckout` seguía bloqueando el inventario — la habitación aparecía como ocupada aunque el huésped nunca llegó.
+**Decisión:** Agregar `noShowAt: null` como condición adicional en la query de disponibilidad:
+```typescript
+where: {
+  roomId,
+  actualCheckout: null,
+  noShowAt: null,       // ← crítico: excluir no-shows del inventario
+  checkIn: { lt: to },
+  checkOut: { gt: from },
+}
+```
+**Consecuencia:** Un no-show libera la habitación instantáneamente para nueva venta.
+
+### 18. `NoShowChargeStatus` — ciclo de vida fiscal
+**Decisión:** Enum explícito para el estado del cargo, separado del estado del no-show mismo:
+```
+NOT_APPLICABLE → PENDING → CHARGED | FAILED | WAIVED
+```
+- `NOT_APPLICABLE`: la propiedad tiene `noShowFeePolicy: 'NONE'` o el actor explícitamente marcó `waiveCharge: true`
+- `PENDING`: cargo capturado en el sistema, pendiente de procesamiento en pasarela de pago
+- `CHARGED`: cargo exitoso — `noShowFeeAmount` y `noShowFeeCurrency` son la evidencia fiscal
+- `FAILED`: intento de cargo fallido (sin fondos, tarjeta expirada, etc.)
+- `WAIVED`: perdonado post-hecho por supervisor/manager
+Esto permite reportes fiscales precisos: `SUM(noShowFeeAmount) WHERE chargeStatus = CHARGED`.
+
+### 19. Reports multi-tab con lazy loading
+**Problema:** ReportsPage antes cargaba todos los datos al abrir. Con el tab de no-shows (query costosa sobre GuestStay con rangos de fecha), la página inicial se volvería lenta.
+**Decisión:** El tab activo se controla por URL param (`?tab=housekeeping` o `?tab=noshow`). Cada query tiene `enabled: activeTab === 'housekeeping'` / `enabled: activeTab === 'noshow'`. Los datos del tab inactivo no se cargan hasta que el usuario navega al tab. Patrón consistente con DailyPlanningPage.
+
+### 20. No-show inline confirm — no Dialog separado
+**Problema:** Abrir un modal extra para confirmar no-show interrumpe el flujo del recepcionista que ya está dentro del BookingDetailSheet.
+**Decisión:** El panel de confirmación de no-show se despliega inline dentro del BookingDetailSheet (accordion-style con `showNoShowConfirm` estado local). Incluye: campo de razón, checkbox de waiveCharge, botones Cancelar/Confirmar. Patrón consistente con DepartureModal/CancelModal del DailyPlanningPage (confirmación en 2 pasos sin escalar el árbol de modales).
+
+---
+
+## Audit Trail como Diferenciador Competitivo
+
+> Por qué el sistema de auditoría de Zenix supera a los PMS del mercado.
+
+### El problema de la industria
+Los PMS legacy (Opera, Cloudbeds, Clock PMS+) tienen auditoría incompleta en operaciones críticas:
+- **Cloudbeds:** No-show es un cambio de estado sin timestamp ni actor. El reporte de no-shows es un filtro de reservas, no un log de eventos.
+- **Opera Cloud:** El audit trail existe pero no es exportable en formato que cumpla CFDI México o facturas LATAM. Reportes fiscales requieren integración con ERP externo.
+- **Clock PMS+:** Tiene reversión de no-show pero no registra quién lo revirtió ni la razón. El cargo de no-show no se vincula al journal de ingresos.
+- **Mews:** El mejor de los comparados — tiene audit trail con actor y timestamp. Pero no tiene `waiveCharge` con razón auditada ni cumplimiento CFDI nativo.
+
+### Lo que ofrece Zenix
+Cada evento crítico genera un registro inmutable con actor, timestamp UTC, y razón:
+
+| Operación | Campos auditados |
+|-----------|-----------------|
+| `markAsNoShow` | `noShowAt`, `noShowById`, `noShowReason`, `noShowChargeStatus`, `noShowFeeAmount` |
+| `revertNoShow` | `noShowRevertedAt`, `noShowRevertedById`, `noShowAt → null` |
+| `markAsNoShowSystem` | `noShowById: null` (indica actor sistema), `noShowAt` |
+| Cargo fallido | `noShowChargeStatus: FAILED` + log en `StayJourney` |
+| Cargo perdonado | `noShowChargeStatus: WAIVED`, actor y razón en `StayJourney.events` |
+
+### Cumplimiento fiscal
+- **México (CFDI 4.0):** Los ingresos por no-show deben facturarse. `noShowFeeAmount` + `noShowFeeCurrency` son los montos de la factura. El campo `noShowChargeStatus: CHARGED` confirma la recepción del ingreso.
+- **Colombia/Perú/Argentina:** Similar. La nota de crédito por reversión usa `noShowRevertedAt` como fecha del evento.
+- **España/UE:** GDPR: los datos del huésped en el no-show record (nombre, email) se pueden anonimizar sin perder el registro fiscal (montos y timestamps permanecen).
+- **Regla de oro:** `GuestStay` con `noShowAt != null` NUNCA se borra con hard delete. Solo soft-delete o anonimización de PII. El registro del cargo permanece indefinidamente.
+
+### El reporte `/reports/no-shows`
+- Exportable a CSV para entrega al contador
+- Agrupa por fuente (OTA, directo, etc.) para comisiones y disputas
+- Suma `noShowFeeAmount` solo para `chargeStatus = CHARGED` (ingresos reales)
+- Muestra `WAIVED` separado (perdonados — no ingresos pero sí eventos auditados)
+- Filtro por rango de fechas — la pestaña `?tab=noshow` en ReportsPage
+
+---
+
+## Requisitos Fiscales (No Negociables)
+
+> Estos requisitos tienen precedencia sobre cualquier decisión de producto o velocidad de desarrollo.
+
+### 1. Inmutabilidad de registros de ingreso
+Los siguientes registros NUNCA se eliminan con hard delete:
+- `GuestStay` con `noShowAt != null` (cargo potencial de no-show)
+- `GuestStay` con `paymentStatus: PAID | PARTIAL` (ingreso recibido)
+- `StayJourney` y `StayJourneyEvent` asociados a los anteriores
+
+Si un huésped solicita borrado de datos (GDPR/LGPD), se **anonimiza PII** (nombre, email, teléfono, documento → valores genéricos) pero el registro financiero y los timestamps permanecen.
+
+### 2. Trazabilidad de cargos
+Todo cargo de no-show debe tener:
+- `noShowFeeAmount: Decimal` — monto exacto (no float, usar `Decimal` de `@prisma/client/runtime/library`)
+- `noShowFeeCurrency: string` — ISO 4217 (e.g., `MXN`, `COP`, `USD`)
+- `noShowChargeStatus` — estado explícito del cargo
+- `noShowById: string | null` — actor que marcó (null = sistema/night audit)
+- `noShowAt: DateTime` — timestamp UTC del evento
+
+### 3. Night audit = corte fiscal del día
+`PropertySettings.noShowProcessedDate` es el sello del cierre del día para no-shows. Una vez procesado:
+- No se pueden crear no-shows retroactivos para ese día sin intervención de administrador
+- El reporte de no-shows del día es estático (los datos no cambian)
+- Cualquier modificación post-corte queda en el audit trail de `StayJourney`
+
+### 4. Aritmética de dinero
+Usar siempre `Decimal` (Prisma/Decimal.js) para sumar, dividir o calcular fees. Nunca `number` nativo para operaciones monetarias.
+
 ---
 
 ## Project Structure
@@ -290,8 +427,13 @@ housekeeping3/
 │   │       ├── staff/                CRUD de housekeepers/supervisores/recepcionistas
 │   │       ├── rooms/                CRUD de habitaciones
 │   │       ├── beds/                 CRUD de camas
-│   │       ├── reports/              Métricas del día
-│   │       ├── settings/             PropertySettings (timezone, checkout time)
+│   │       ├── reports/              Métricas del día + no-show report
+│   │       ├── settings/             PropertySettings (timezone, checkout time, noShowCutoffHour)
+│   │       ├── pms/
+│   │       │   └── guest-stays/      GuestStay CRUD + markAsNoShow + revertNoShow
+│   │       │       ├── guest-stays.service.ts    Lógica de negocio (no-show, checkAvailability, findOne)
+│   │       │       ├── guest-stays.controller.ts GET /:id, POST /:id/no-show, POST /:id/revert-no-show
+│   │       │       └── night-audit.scheduler.ts  Cron 30min, multi-timezone, noShowProcessedDate
 │   │       ├── integrations/
 │   │       │   └── cloudbeds/        Webhook handler (idempotente)
 │   │       ├── common/
@@ -303,15 +445,39 @@ housekeeping3/
 │   ├── web/                          React SPA (dashboard recepción + supervisores)
 │   │   └── src/
 │   │       ├── pages/
-│   │       │   ├── DailyPlanningPage.tsx  ★ Pantalla principal — ver sección Módulos
-│   │       │   ├── KanbanPage.tsx         Vista supervisor (esqueleto)
-│   │       │   ├── CheckoutsPage.tsx      Historial de checkouts
-│   │       │   ├── DiscrepanciesPage.tsx  Lista de discrepancias abiertas
-│   │       │   ├── ReportsPage.tsx        Métricas del día
+│   │       │   ├── DailyPlanningPage.tsx       ★ Pantalla principal — ver sección Módulos
+│   │       │   ├── ReservationDetailPage.tsx   ★ Detalle completo de reserva (/reservations/:id)
+│   │       │   ├── KanbanPage.tsx              Vista supervisor (esqueleto)
+│   │       │   ├── CheckoutsPage.tsx           Historial de checkouts
+│   │       │   ├── DiscrepanciesPage.tsx       Lista de discrepancias abiertas
+│   │       │   ├── ReportsPage.tsx             Métricas del día (?tab=housekeeping|noshow)
 │   │       │   └── LoginPage.tsx
 │   │       ├── components/
-│   │       │   ├── Sidebar.tsx        Navegación desktop + mobile drawer
-│   │       │   └── Navbar.tsx
+│   │       │   ├── Sidebar.tsx        GlobalTopBar (hamburger + [+] + calendario + bell + UserMenu)
+│   │       │   ├── AppDrawer.tsx      Drawer de navegación lateral (hamburger)
+│   │       │   └── UserMenu.tsx       Avatar con <User> icon → dropdown de cuenta
+│   │       ├── modules/rooms/
+│   │       │   ├── components/
+│   │       │   │   ├── timeline/
+│   │       │   │   │   ├── TimelineScheduler.tsx  ★ Componente raíz del calendario PMS
+│   │       │   │   │   ├── BookingBlock.tsx        Bloque de reserva (drag, click, tooltip)
+│   │       │   │   │   ├── BookingsLayer.tsx       Capa de render de bloques sobre el grid
+│   │       │   │   │   ├── DateHeader.tsx          Cabecera de fechas (hoy = emerald highlight)
+│   │       │   │   │   ├── RoomColumn.tsx          Columna izquierda de habitaciones
+│   │       │   │   │   ├── TimelineSubBar.tsx      Controles (hoy/semana/mes, rango)
+│   │       │   │   │   ├── TodayColumnHighlight.tsx Columna de hoy resaltada
+│   │       │   │   │   ├── TooltipPortal.tsx       Tooltip de reserva (flip top/bottom)
+│   │       │   │   │   └── NoShowConfirmModal.tsx  Modal confirmación no-show con badge OTA
+│   │       │   │   └── dialogs/
+│   │       │   │       └── BookingDetailSheet.tsx  Panel lateral 420px + ↗ Ver completa
+│   │       │   ├── api/
+│   │       │   │   └── guest-stays.api.ts      list, get, create, checkout, moveRoom
+│   │       │   ├── hooks/
+│   │       │   │   ├── useGuestStays.ts        Fetch + optimistic create + mutations
+│   │       │   │   └── useTooltip.ts           Tooltip state + position (flip logic)
+│   │       │   └── utils/
+│   │       │       ├── timeline.constants.ts   TIMELINE, SOURCE_COLORS, OTA_ACCENT_COLORS
+│   │       │       └── timeline.utils.ts       getStayStatus, otros helpers
 │   │       ├── hooks/
 │   │       │   └── useSSE.ts          EventSource con reconexión y cleanup automático
 │   │       ├── api/
@@ -424,6 +590,115 @@ function getState(roomId, bedId, cell) {
 // Tab via URL — persiste entre navegaciones
 const activeTab = searchParams.get('tab') ?? 'planning'
 ```
+
+---
+
+### ✅ GuestStaysService — COMPLETO (Sesión 6)
+
+**Responsabilidad:** CRUD de estadías de huéspedes. Punto de entrada del módulo PMS.
+
+**Métodos:**
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| `create` | `POST /v1/guest-stays` | Alta de reserva con validación de disponibilidad |
+| `findOne` | `GET /v1/guest-stays/:id` | Detalle de una reserva, incluye `room.number` |
+| `findByProperty` | `GET /v1/guest-stays` | Lista de estadías por propiedad y rango de fechas |
+| `checkAvailability` | `GET /v1/guest-stays/availability` | Pre-flight sin efectos secundarios |
+| `checkout` | `POST /v1/guest-stays/:id/checkout` | Cierra la estadía, actualiza room status |
+| `moveRoom` | `PATCH /v1/guest-stays/:id/move-room` | Traslado de habitación mid-stay |
+| `markAsNoShow` | `POST /v1/guest-stays/:id/no-show` | Marca no-show con audit trail fiscal |
+| `revertNoShow` | `POST /v1/guest-stays/:id/revert-no-show` | Revierte dentro de ventana de 48h |
+
+**Decisión importante — orden de rutas:**
+`@Get('availability')` declarado ANTES de `@Get(':id')` en el controller para evitar que NestJS interprete el string `"availability"` como un `:id` param.
+
+---
+
+### ✅ Calendario PMS (TimelineScheduler) — COMPLETO (Sesión 6)
+
+**Responsabilidad:** Vista de calendario tipo Cloudbeds/Mews para el módulo PMS (`/pms`). Muestra todas las reservas activas en un grid habitación × día.
+
+**Componentes clave:**
+
+| Componente | Responsabilidad |
+|------------|-----------------|
+| `TimelineScheduler.tsx` | Raíz — coordina state, scroll, mutations, modales |
+| `BookingBlock.tsx` | Bloque de reserva en el grid. Soporta drag horizontal, tooltip, click para panel |
+| `BookingsLayer.tsx` | Render virtual de todos los bloques sobre el grid de fechas |
+| `DateHeader.tsx` | Cabecera de días con highlight del día actual (emerald) |
+| `RoomColumn.tsx` | Columna izquierda fija con nombre/número de habitación y estado |
+| `TimelineSubBar.tsx` | Barra de controles: HOY / ← → / Semana / Mes |
+| `TodayColumnHighlight.tsx` | Columna de hoy con fondo sutil `rgba(16,185,129,0.06)` |
+| `TooltipPortal.tsx` | Portal de tooltip flotante (flips top↔bottom según posición) |
+| `NoShowConfirmModal.tsx` | Modal de confirmación de no-show con badge OTA y advertencia |
+| `BookingDetailSheet.tsx` | Panel lateral 420px — detalle de reserva con tabs segmentadas |
+
+**Flujo de interacción completo:**
+```
+Click en bloque → BookingBlock.handleMouseDown
+  ├─ Si isPast (reserva anterior): escucha solo mouseup → abre BookingDetailSheet
+  ├─ Si arrastrar: actualiza posición → suelta → mutation moveRoom/extend
+  └─ Si click normal: show() tooltip → tooltip muestra acciones
+
+Tooltip acciones:
+  ├─ "Abrir detalle" → setDetailStay → BookingDetailSheet
+  ├─ "Marcar no-show" → hide() + setNoShowDialog → NoShowConfirmModal
+  └─ hover prolongado sin click → auto-show tooltip
+
+BookingDetailSheet header:
+  ├─ "↗ Ver completa" → navigate(/reservations/:id)
+  └─ "×" → onClose()
+```
+
+**Patrones críticos del calendario:**
+
+1. **Stacking context isolation** — el div del grid tiene `z-0` para crear un stacking context aislado. Esto garantiza que `RoomColumn` (`z-[25]`) siempre pinte encima de los bloques de reserva sin importar el z-index de estos.
+
+2. **Tooltip flip** — `calculatePosition()` en `useTooltip.ts` detecta si `rect.top < 280` y cambia el placement de `'top'` a `'bottom'`. `TooltipPortal` ajusta el `transform` según el placement.
+
+3. **Past guests** — huéspedes pasados (`isPast = true`) NO activan drag. En `handleMouseDown` se registra un `mouseup` listener one-shot para disparar `onClick()` sin pasar por la lógica de drag.
+
+4. **Color tokens** — el proyecto **NO tiene** token `brand-*` en `tailwind.config.js`. Todos los highlights de hoy usan `emerald` directamente (`bg-emerald-50`, `text-emerald-700`, `bg-emerald-600`).
+
+5. **No-show flow** — al clicar "Marcar no-show" en el tooltip, se llama `hide()` primero para cerrar el tooltip ANTES de abrir el modal. Sin este orden el tooltip queda stuck.
+
+---
+
+### ✅ ReservationDetailPage — COMPLETO (Sesión 6)
+
+**Ruta:** `/reservations/:id`
+
+**Responsabilidad:** Página de detalle completo de una reserva. Nivel 2 en la arquitectura de dos niveles (panel 420px = nivel 1, página completa = nivel 2). Patrón NNG progressive disclosure.
+
+**Estructura de la página:**
+```
+[← Volver]
+
+┌────────────────────────────────────────────────┐
+│  [OTA stripe de color]                          │
+│  [Status badge] [OTA badge]                     │
+│  Nombre del huésped                             │
+│  Hab. 101                                       │
+│                  [Revertir no-show] [Checkout]  │
+├────────────────────────────────────────────────┤
+│  Check-in    Check-out    Noches    Huéspedes   │  ← quick-stats bar
+└────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────┐
+│ [Estadía] [Pago] [Huésped] [Historial]       │  ← segmented control
+├──────────────────────────────────────────────┤
+│ Tab Estadía: fechas, hab, canal, IDs, notas   │
+│ Tab Pago: totales, progress bar, paymentStatus │
+│ Tab Huésped: nombre, teléfono, email, doc      │
+│ Tab Historial: timeline de eventos (audit)     │
+└──────────────────────────────────────────────┘
+```
+
+**Fuente de datos:** `GET /v1/guest-stays/:id` → `GuestStayDto` (con `room.number` incluido).
+
+**Decisión de diseño — botones de acción navegan a `/pms`:**
+Las mutaciones de checkout y revert-no-show no están disponibles en la página de detalle standalone. Al clickar, el usuario vuelve al calendario PMS donde las acciones están en contexto (con el panel lateral abierto). Esto es intencional — las acciones críticas requieren el contexto del calendario.
 
 ---
 
@@ -594,26 +869,30 @@ it('descripción en español — qué debe hacer', async () => {
 - Asignación manual: `<select>` de staff en cards UNASSIGNED
 - Sin esto, el supervisor opera ciego
 
-**2. Mobile — screens pendientes**
+**2. ReservationDetailPage — acciones funcionales**
+- Los botones "Checkout" y "Revertir no-show" actualmente navegan a `/pms` (redirect). Necesitan ejecutar las mutaciones directamente desde la página de detalle.
+- Requiere conectar `useCheckout` y `useRevertNoShow` al contexto de `propertyId` correcto fuera del `TimelineScheduler`.
+
+**3. Mobile — screens pendientes**
 - `DiscrepancyReportScreen` — formulario tipo/descripción + foto opcional
 - `NoteScreen` — agregar nota de limpieza a una tarea
 - `MaintenanceIssueScreen` — reportar problema de mantenimiento con foto
 
 ### Media prioridad
 
-**3. DiscrepanciesPage web — flujo de resolución**
+**4. DiscrepanciesPage web — flujo de resolución**
 - `PATCH /discrepancies/:id/resolve` (endpoint existe, UI no)
 
-**4. WebSocket/SSE para mobile**
+**5. WebSocket/SSE para mobile**
 - La mobile usa polling. Debería usar push para actualizaciones en tiempo real.
 
 ### Baja prioridad
 
-**5. Tests E2E con Supertest**
+**6. Tests E2E con Supertest**
 
-**6. CI/CD pipeline**
+**7. CI/CD pipeline**
 
-**7. CloudBeds webhook handler con verificación HMAC**
+**8. CloudBeds webhook handler con verificación HMAC**
 
 ---
 
@@ -1153,6 +1432,30 @@ OPEN → ACKNOWLEDGED → IN_PROGRESS → RESOLVED → VERIFIED → CLOSED
 
 ## Known Issues & Edge Cases
 
+### Resueltos en Sesión 6
+
+| Issue | Causa | Fix |
+|-------|-------|-----|
+| Tooltip queda abierto al clicar "Marcar no-show" | `onNoShow` en `BookingBlock` no llamaba `hide()` antes de abrir el modal | Envolver `onNoShow` para llamar `hide()` primero, luego el callback |
+| Huéspedes pasados no eran clicables | `handleMouseDown` retornaba en `isPast` antes de registrar el click | Separar path: si `isPast`, registrar `mouseup` one-shot para `onClick()` sin drag |
+| Tooltip se recortaba en bloques cerca del borde superior | `calculatePosition` siempre colocaba el tooltip arriba | Flip a `'bottom'` si `rect.top < 280`; `TooltipPortal` ajusta `transform` según `placement` |
+| Sidebar cubría los bloques de reserva | `RoomColumn` tiene `z-[25]` pero el grid div no creaba stacking context → bloques podían pintarse encima | Agregar `z-0` al div del grid para aislar el stacking context |
+| Dos botones X en `AppDrawer` | Radix `SheetContent` renderiza su propio X + el X manual del header | Agregar `showCloseButton={false}` a `SheetContent` |
+| Tabs en `BookingDetailSheet` sin estado activo visible | `TabsList` dentro de `overflow-y-auto` → scroll la ocultaba; estilos de tab no aplicaban | Mover `TabsList` fuera del scroll; usar segmented control (iOS style) con `data-[state=active]` |
+| Color `brand-*` no existía | Token no definido en `tailwind.config.js` | Reemplazar todos los usos de `brand` por `emerald` en `DateHeader`, `BookingBlock`, `TodayColumnHighlight` |
+| Precio estático `USD X` en columna de habitaciones | Precios dinámicos hacen el dato engañoso; ningún PMS de referencia lo muestra en el calendario | Eliminar `baseRate` del grupo header en `RoomColumn` |
+| Trimestre en `TimelineSubBar` sin valor operativo | El calendario de housekeeping opera en semanas/meses; la vista trimestral es distractor | Eliminar `{ mode: 'quarter', label: 'Trimestre' }` de `VIEW_OPTIONS` |
+| `GuestStayDto` faltaba `nationality`, `documentType`, `documentNumber` | Campos presentes en el schema Prisma pero ausentes en el tipo compartido | Agregar los tres campos a la interfaz en `packages/shared/src/types.ts` |
+
+### Resueltos en Sesión 5
+
+| Issue | Causa | Fix |
+|-------|-------|-----|
+| Night audit hardcodeaba `America/Mexico_City` | PMS global con propiedades en múltiples zonas horarias | `Intl.DateTimeFormat` con `PropertySettings.timezone` por propiedad |
+| No-shows bloqueaban inventario | `checkAvailability` no excluía stays con `noShowAt` | Agregar `noShowAt: null` al filtro de conflictos |
+| `IsOptional` importado de `@nestjs/common` | Error de import incorrecto | Mover a `class-validator` |
+| Double-processing en night audit | Cron cada 30min sin guardia de idempotencia | `noShowProcessedDate` como semáforo por propiedad |
+
 ### Resueltos en Sesión 3-4
 
 | Issue | Causa | Fix |
@@ -1264,3 +1567,25 @@ npx prisma studio
 9. **Cancel per-bed:** con `bedId` no marca `checkout.cancelled = true`. Sin `bedId` sí.
 
 10. **Módulo de Mantenimiento monolítico** — comparte BD, NestJS y auth con Housekeeping. No es microservicio. Separación a nivel de módulos NestJS.
+
+11. **Registros de no-show son inmutables** — nunca hard-delete de `GuestStay` con `noShowAt != null`. Solo anonimización de PII para cumplimiento GDPR/LGPD. El registro fiscal (montos, timestamps, actores) permanece indefinidamente.
+
+12. **Night audit NUNCA hardcodea timezone** — siempre usar `PropertySettings.timezone` (IANA string) con `Intl.DateTimeFormat`. El scheduler `NightAuditScheduler` evalúa cada propiedad independientemente.
+
+13. **`noShowProcessedDate` como idempotencia del corte nocturno** — antes de procesar no-shows, verificar que `localDate !== noShowProcessedDate`. Actualizar el campo al final de cada corte exitoso. Esto previene doble-procesamiento si el servidor reinicia o el cron dispara múltiples veces.
+
+14. **Aritmética monetaria con `Decimal`** — nunca `number` nativo para sumar fees, totales, o cualquier operación financiera. Importar `Decimal` de `@prisma/client/runtime/library`.
+
+15. **`checkAvailability` excluye no-shows** — el filtro de conflictos de inventario incluye `noShowAt: null`. Sin esto, un no-show bloquea el cuarto indefinidamente para nueva venta.
+
+16. **Color tokens del calendario: solo `emerald`, nunca `brand-*`** — `tailwind.config.js` no define ningún token `brand`. Todos los highlights del día actual, colores del header de fecha y la columna de hoy usan clases `emerald` directamente. Agregar un token `brand` sin configurarlo causa que Tailwind no genere las clases y el UI queda sin estilos.
+
+17. **Grid del calendario con `z-0` (stacking context)** — el div raíz del grid de fechas debe tener `z-0` (o cualquier valor de z-index explícito) para crear un stacking context aislado. Sin esto, `RoomColumn` (`z-[25]`) compite en el mismo stacking context que los bloques y puede quedar cubierto. Con `z-0`, el grid entero es una isla de z-index.
+
+18. **`hide()` antes de `onNoShow`** — al clicar "Marcar no-show" en el tooltip, el callback debe llamar `hide()` primero y luego `onNoShow(stayId)`. Si se abre el modal sin cerrar el tooltip, el tooltip queda pegado visible debajo del modal.
+
+19. **Arquitectura de dos niveles para detalle de reserva** — `BookingDetailSheet` (420px) cubre el 90% de los casos operativos. `ReservationDetailPage` (`/reservations/:id`) es el nivel 2 para casos que requieren auditoría completa, historial, o documentación formal. Las mutaciones críticas (checkout, revert no-show) solo están disponibles en el contexto del calendario PMS, no en la página standalone. Esto sigue el patrón NNG de progressive disclosure y evita el problema de Cloudbeds (3+ clicks para información básica).
+
+20. **`GET /v1/guest-stays/availability` ANTES de `GET /v1/guest-stays/:id`** — NestJS resuelve rutas en orden de declaración. Si `:id` aparece antes que `availability`, el string literal "availability" es interpretado como un param dinámico y la ruta de disponibilidad nunca matchea. El orden en el controller es: `GET availability` → `GET :id` → `GET /` (lista).
+
+21. **`BookingDetailSheet` tiene su propio botón `×`** — `SheetContent` de Shadcn/Radix tiene un close button por defecto. Al agregar un `×` manual al header, se deben tener ambos o suprimir el de Radix con `showCloseButton={false}`. Usar `showCloseButton={false}` y renderizar el `×` propio en el header da control total sobre el posicionamiento y estilo.

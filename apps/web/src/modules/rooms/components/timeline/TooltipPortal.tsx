@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Calendar, Moon, Users } from 'lucide-react'
+import { Calendar, Moon, Users, UserX } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PaymentStatusBadge } from '../shared'
 import { STAY_STATUS_COLORS, OTA_ACCENT_COLORS, SOURCE_COLORS } from '../../utils/timeline.constants'
@@ -14,9 +14,11 @@ interface TooltipPortalProps {
   position: { x: number; y: number; placement: 'top' | 'bottom' }
   visible: boolean
   registerTooltipRef?: (el: HTMLDivElement | null) => void
+  onNoShow?: (stayId: string) => void
+  isPotentialNoShow?: boolean
 }
 
-export function TooltipPortal({ stay, position, visible, registerTooltipRef }: TooltipPortalProps) {
+export function TooltipPortal({ stay, position, visible, registerTooltipRef, onNoShow, isPotentialNoShow }: TooltipPortalProps) {
   if (!visible) return null
 
   const stayStatus = getStayStatus(stay.checkIn, stay.checkOut, stay.actualCheckout)
@@ -32,10 +34,11 @@ export function TooltipPortal({ stay, position, visible, registerTooltipRef }: T
     left: position.x,
     top: position.y,
     zIndex: 9999,
-    // Shift the tooltip so its BOTTOM aligns with `top` — tooltip appears above cursor.
-    // Horizontal: center on `left` (cursor X already clamped in useTooltip).
-    transform: 'translate(-50%, -100%)',
-    pointerEvents: 'none',
+    // top → BOTTOM of tooltip aligns with `top` (tooltip appears above block).
+    // bottom → TOP of tooltip aligns with `top` (tooltip appears below block).
+    transform: position.placement === 'top' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+    // Allow pointer events when tooltip has an interactive no-show action.
+    pointerEvents: isPotentialNoShow && onNoShow ? 'auto' : 'none',
   }
 
   const animationClass =
@@ -73,6 +76,14 @@ export function TooltipPortal({ stay, position, visible, registerTooltipRef }: T
                   <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                   <span className="text-[10px] font-semibold text-amber-700">
                     Sale hoy — checkout pendiente
+                  </span>
+                </div>
+              )}
+              {isPotentialNoShow && (
+                <div className="flex items-center gap-1 mt-1">
+                  <UserX className="h-3 w-3 text-orange-500 shrink-0" />
+                  <span className="text-[10px] font-semibold text-orange-700">
+                    No se presentó — posible no-show
                   </span>
                 </div>
               )}
@@ -155,6 +166,32 @@ export function TooltipPortal({ stay, position, visible, registerTooltipRef }: T
             </div>
           )}
         </div>
+
+        {/* No-show quick action */}
+        {isPotentialNoShow && onNoShow && (
+          <div className="px-3.5 pb-2.5">
+            <div className="rounded-lg bg-orange-50 border border-orange-200 p-2.5">
+              <p className="text-[10px] text-orange-700 leading-snug mb-2">
+                No llegó en fecha pactada. Ver detalles al confirmar.
+              </p>
+              <button
+                className={cn(
+                  'w-full flex items-center justify-center gap-1.5',
+                  'bg-orange-600 hover:bg-orange-700 active:bg-orange-800',
+                  'text-white text-[11px] font-bold rounded-md',
+                  'px-3 py-1.5 transition-colors shadow-sm',
+                )}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onNoShow(stay.id)
+                }}
+              >
+                <UserX className="h-3 w-3" />
+                Marcar no-show
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Arrow */}
         {position.placement === 'top' && (
