@@ -1,5 +1,9 @@
 import {
   BedStatus,
+  BlockLogEvent,
+  BlockReason,
+  BlockSemantic,
+  BlockStatus,
   Capability,
   CheckoutSource,
   CleaningStatus,
@@ -243,6 +247,14 @@ export type SseEventType =
   | 'checkout:confirmed'
   | 'checkin:completed'
   | 'room:moved'
+  // SmartBlock events
+  | 'block:created'
+  | 'block:approved'
+  | 'block:rejected'
+  | 'block:activated'
+  | 'block:expired'
+  | 'block:cancelled'
+  | 'block:extended'
 
 // ─── Offline Sync (Mobile) ────────────────────────────────────────────────────
 
@@ -254,6 +266,75 @@ export interface SyncOperation {
   taskId: string
   timestamp: string
   retryCount: number
+}
+
+// ─── SmartBlock ───────────────────────────────────────────────────────────────
+
+export interface BlockLogDto {
+  id: string
+  blockId: string
+  staffId: string | null
+  event: BlockLogEvent
+  note: string | null
+  metadata: Record<string, unknown> | null
+  createdAt: string
+  staff?: Pick<StaffDto, 'id' | 'name'> | null
+}
+
+export interface RoomBlockDto {
+  id: string
+  propertyId: string
+  roomId: string | null     // null = bloqueo solo de cama
+  bedId: string | null      // null = bloqueo de habitación completa
+  semantic: BlockSemantic
+  reason: BlockReason
+  status: BlockStatus
+  notes: string | null
+  internalNotes: string | null
+  startDate: string         // ISO — cuándo entra en vigor
+  endDate: string | null    // ISO — cuándo expira (null = indefinido)
+  requestedById: string
+  approvedById: string | null
+  approvalNotes: string | null
+  approvedAt: string | null
+  cleaningTaskId: string | null  // tarea MAINTENANCE creada al activar
+  createdAt: string
+  updatedAt: string
+  // Populated relations (endpoints de detalle)
+  room?: RoomDto | null
+  bed?: BedDto | null
+  requestedBy?: Pick<StaffDto, 'id' | 'name'>
+  approvedBy?: Pick<StaffDto, 'id' | 'name'> | null
+  cleaningTask?: Pick<CleaningTaskDto, 'id' | 'status' | 'assignedToId'> | null
+  logs?: BlockLogDto[]
+}
+
+// Request payloads
+export interface CreateBlockDto {
+  roomId?: string        // XOR con bedId — si ninguno → error
+  bedId?: string
+  semantic: BlockSemantic
+  reason: BlockReason
+  notes?: string
+  internalNotes?: string
+  startDate?: string     // ISO, default = now
+  endDate?: string       // ISO, null = indefinido
+}
+
+export interface ApproveBlockDto {
+  approvalNotes?: string
+}
+
+export interface RejectBlockDto {
+  approvalNotes: string  // obligatorio al rechazar
+}
+
+export interface CancelBlockDto {
+  reason: string         // obligatorio al cancelar
+}
+
+export interface ExtendBlockDto {
+  endDate: string        // nueva fecha ISO > endDate actual
 }
 
 // ─── Room Availability ────────────────────────────────────────────────────────

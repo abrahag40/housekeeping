@@ -11,7 +11,7 @@ import {
 import { useRouter } from 'expo-router'
 import { useTaskStore } from '../../src/store/tasks'
 import { useAuthStore } from '../../src/store/auth'
-import { CleaningStatus, Priority } from '@zenix/shared'
+import { CleaningStatus, Priority, TaskType } from '@zenix/shared'
 import type { CleaningTaskDto } from '@zenix/shared'
 import { Stack } from 'expo-router'
 
@@ -116,11 +116,13 @@ function TaskCard({ task, onPress }: { task: CleaningTaskDto; onPress: () => voi
   const isReady = task.status === CleaningStatus.READY
   const isDone = task.status === CleaningStatus.DONE || task.status === CleaningStatus.VERIFIED
   const isUrgent = task.priority === Priority.URGENT
+  const isMaintenance = task.taskType === TaskType.MAINTENANCE
 
   return (
     <TouchableOpacity
       style={[
         styles.card,
+        isMaintenance && styles.cardMaintenance,
         isInProgress && styles.cardInProgress,
         isReady && styles.cardReady,
         isDone && styles.cardDone,
@@ -131,12 +133,13 @@ function TaskCard({ task, onPress }: { task: CleaningTaskDto; onPress: () => voi
       <View style={styles.cardHeader}>
         <View>
           <View style={styles.roomRow}>
-            {isUrgent && <Text style={styles.urgentBadge}>🔴 </Text>}
+            {isMaintenance && <Text style={styles.maintenanceBadge}>🔧 </Text>}
+            {isUrgent && !isMaintenance && <Text style={styles.urgentBadge}>🔴 </Text>}
             <Text style={styles.roomNumber}>{room?.number ?? '—'}</Text>
             {task.bed && <Text style={styles.bedLabel}> · {task.bed.label}</Text>}
           </View>
           <Text style={styles.roomSub}>
-            {room?.type === 'PRIVATE' ? 'Privada' : 'Compartida'}
+            {isMaintenance ? 'Mantenimiento' : room?.type === 'PRIVATE' ? 'Privada' : 'Compartida'}
             {room?.floor != null ? ` · Piso ${room.floor}` : ''}
           </Text>
         </View>
@@ -175,6 +178,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
+  cardMaintenance: { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
   cardInProgress: { borderColor: '#93C5FD', backgroundColor: '#EFF6FF' },
   cardReady: { borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
   cardDone: { opacity: 0.7 },
@@ -185,6 +189,7 @@ const styles = StyleSheet.create({
   },
   roomRow: { flexDirection: 'row', alignItems: 'center' },
   urgentBadge: { fontSize: 13 },
+  maintenanceBadge: { fontSize: 13 },
   roomNumber: { fontSize: 18, fontWeight: '700', color: '#111827' },
   bedLabel: { fontSize: 14, color: '#6B7280' },
   roomSub: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },

@@ -28,6 +28,7 @@
  */
 
 import { useState, useMemo, useCallback, type ReactNode } from 'react'
+import { BlockModal } from '../components/blocks/BlockModal'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { format } from 'date-fns'
@@ -414,6 +415,18 @@ export function DailyPlanningPage() {
     },
     onError: () => toast.error('Error al reconocer'),
   })
+
+  // ── SmartBlock modal state ────────────────────────────────────────────────
+
+  /**
+   * blockTarget: prefill para el modal de bloqueo abierto desde una celda.
+   * null = modal cerrado.
+   *
+   * Se asigna al singleton `_openBlockModal` para que los sub-componentes
+   * (BlockTrigger) puedan abrir el modal sin prop drilling.
+   */
+  const [blockTarget, setBlockTarget] = useState<{ roomId: string; bedId: string } | null>(null)
+  _openBlockModal = (roomId, bedId) => setBlockTarget({ roomId, bedId })
 
   // ── Helpers de planificación ──────────────────────────────────────────────
 
@@ -823,7 +836,50 @@ export function DailyPlanningPage() {
           onClose={() => setDepartTarget(null)}
         />
       )}
+
+      {/* Modal de bloqueo de cama/habitación (SmartBlock) */}
+      <BlockModal
+        isOpen={blockTarget !== null}
+        onClose={() => setBlockTarget(null)}
+        onSubmit={async (dto) => {
+          await api.post('/blocks', dto)
+          qc.invalidateQueries({ queryKey: ['blocks'] })
+          setBlockTarget(null)
+          toast.success('Solicitud de bloqueo creada')
+        }}
+        prefillRoomId={blockTarget?.roomId}
+        prefillBedId={blockTarget?.bedId}
+      />
     </div>
+  )
+}
+
+// ─── SmartBlock trigger (contextual desde planning grid) ─────────────────────
+
+/**
+ * Módulo-level state para el modal de bloqueo.
+ * Usamos un patrón de "singleton de modal" en vez de Context para mantener
+ * el DailyPlanningPage auto-contenido y evitar prop drilling innecesario.
+ */
+let _openBlockModal: ((roomId: string, bedId: string) => void) | null = null
+
+/**
+ * BlockTrigger — botón 🔒 que abre el modal de bloqueo con prefill.
+ * Se usa dentro de las tarjetas de planificación sin necesidad de props
+ * adicionales gracias al patrón de singleton de handler.
+ */
+function BlockTrigger({ roomId, bedId, label = '🔒' }: { roomId: string; bedId?: string; label?: string }) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        _openBlockModal?.(roomId, bedId ?? '')
+      }}
+      title="Bloquear cama/habitación"
+      className="text-xs text-gray-400 hover:text-indigo-600 px-1 py-0.5 rounded hover:bg-indigo-50 transition-colors"
+    >
+      {label}
+    </button>
   )
 }
 
@@ -924,9 +980,12 @@ function PrivatePlanningCard({
       {/* Header: número de habitación + piso */}
       <div className={`px-3 py-2 flex items-center justify-between ${headerCls}`}>
         <span className="font-semibold text-sm text-gray-900">{row.roomNumber}</span>
-        {row.floor != null && (
-          <span className="text-xs text-gray-400">P{row.floor}</span>
-        )}
+        <div className="flex items-center gap-2">
+          {row.floor != null && (
+            <span className="text-xs text-gray-400">P{row.floor}</span>
+          )}
+          <BlockTrigger roomId={row.roomId} bedId={bed.bedId} label="🔒" />
+        </div>
       </div>
 
       {/* Cuerpo: estado + acciones */}
@@ -1091,8 +1150,11 @@ function PlanningRow({
             return (
               <div key={bed.bedId} className="flex flex-col gap-1 min-w-[100px]">
 
-                {/* Label de cama */}
-                <p className="text-xs text-gray-500 font-medium text-center">{bed.bedLabel}</p>
+                {/* Label de cama + trigger de bloqueo */}
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-gray-500 font-medium">{bed.bedLabel}</p>
+                  <BlockTrigger roomId={row.roomId} bedId={bed.bedId} />
+                </div>
 
                 {/* Botón principal: cicla Disponible ↔ Checkout.
                     Deshabilitado si el servidor ya guardó la tarea (isServerSaved)

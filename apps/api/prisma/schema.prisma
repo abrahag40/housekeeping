@@ -180,6 +180,7 @@ model Organization {
   roomTypeChecklists RoomTypeChecklist[]
   roomReadinessTasks RoomReadinessTask[]
   stayJourneys       StayJourney[]
+  roomBlocks         RoomBlock[]
 
   @@map("organizations")
 }
@@ -279,6 +280,7 @@ model Room {
   guestStays   GuestStay[]
   readinessTasks RoomReadinessTask[]
   staySegments StaySegment[]
+  blocks       RoomBlock[]
 
   @@unique([propertyId, number])
   @@index([organizationId])
@@ -301,6 +303,7 @@ model Bed {
   room          Room             @relation(fields: [roomId], references: [id])
   cleaningTasks CleaningTask[]
   discrepancies BedDiscrepancy[]
+  blocks        RoomBlock[]
 
   @@index([organizationId])
   @@map("beds")
@@ -332,6 +335,9 @@ model HousekeepingStaff {
   issues                MaintenanceIssue[]
   reportedDiscrepancies BedDiscrepancy[] @relation("DiscrepancyReporter")
   resolvedDiscrepancies BedDiscrepancy[] @relation("DiscrepancyResolver")
+  requestedBlocks       RoomBlock[]      @relation("BlocksRequested")
+  approvedBlocks        RoomBlock[]      @relation("BlocksApproved")
+  blockLogs             BlockLog[]       @relation("BlockLogs")
 
   @@index([organizationId])
   @@index([organizationId, propertyId])
@@ -392,6 +398,7 @@ model CleaningTask {
   logs         TaskLog[]
   notes        CleaningNote[]
   issues       MaintenanceIssue[]
+  block        RoomBlock?         @relation("BlockTask")
 
   @@index([organizationId])
   @@index([status])
@@ -855,4 +862,138 @@ model StayJourneyEvent {
   @@index([journeyId, occurredAt])
   @@index([eventType, occurredAt])
   @@map("stay_journey_events")
+}
+
+// ======================= SMARTBLOCK =======================
+
+enum BlockSemantic {
+  OUT_OF_SERVICE
+  OUT_OF_ORDER
+  OUT_OF_INVENTORY
+  HOUSE_USE
+}
+
+enum BlockReason {
+  MAINTENANCE
+  DEEP_CLEANING
+  INSPECTION
+  PHOTOGRAPHY
+  VIP_SETUP
+  PEST_CONTROL
+  WATER_DAMAGE
+  ELECTRICAL
+  PLUMBING
+  STRUCTURAL
+  RENOVATION
+  OWNER_STAY
+  STAFF_USE
+  OTHER
+}
+
+enum BlockStatus {
+  PENDING_APPROVAL
+  APPROVED
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  REJECTED
+}
+
+enum BlockLogEvent {
+  CREATED
+  APPROVED
+  REJECTED
+  ACTIVATED
+  EXTENDED
+  EARLY_RELEASE
+  CANCELLED
+  EXPIRED
+  NOTE_ADDED
+}
+
+/**
+ * RoomBlock — bloqueo de cama o habitación con workflow de aprobación.
+ *
+ * Granularidad:
+ *   bedId != null → bloqueo de cama individual (dormitorios compartidos)
+ *   bedId == null → bloqueo de habitación completa
+ *
+ * Semánticas:
+ *   OUT_OF_SERVICE   → problema menor, no impacta RevPAR
+ *   OUT_OF_ORDER     → inhabilitada, impacta RevPAR, requiere aprobación
+ *   OUT_OF_INVENTORY → largo plazo, excluida del inventario operativo
+ *   HOUSE_USE        → uso interno (fotos, staff)
+ *
+ * Al activarse (APPROVED → ACTIVE):
+ *   1. Se crea CleaningTask(MAINTENANCE, UNASSIGNED)
+ *   2. bed.status = BLOCKED
+ *   3. SSE: block:activated
+ *
+ * Auto-aprobación:
+ *   OOS + actor = SUPERVISOR → APPROVED inmediato (sin pasar por PENDING)
+ *   HOUSE_USE + actor = SUPERVISOR → APPROVED inmediato
+ *   Cualquier otro caso → PENDING_APPROVAL
+ */
+model RoomBlock {
+  id             String        @id @default(uuid())
+  organizationId String        @map("organization_id")
+  propertyId     String        @map("property_id")
+  roomId         String?       @map("room_id")   // null = solo cama
+  bedId          String?       @map("bed_id")    // null = habitación completa
+
+  semantic       BlockSemantic
+  reason         BlockReason
+  status         BlockStatus   @default(PENDING_APPROVAL)
+
+  notes          String?                        // visible para housekeeping
+  internalNotes  String?       @map("internal_notes") // solo supervisores
+
+  startDate      DateTime      @map("start_date") @db.Date
+  endDate        DateTime?     @map("end_date")   @db.Date // null = indefinido
+
+  requestedById  String        @map("requested_by_id")
+  approvedById   String?       @map("approved_by_id")
+  approvalNotes  String?       @map("approval_notes")
+  approvedAt     DateTime?     @map("approved_at")
+
+  // Tarea de mantenimiento creada automáticamente al activar el bloqueo
+  cleaningTaskId String?       @unique @map("cleaning_task_id")
+
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  organization   Organization      @relation(fields: [organizationId], references: [id])
+  room           Room?             @relation(fields: [roomId], references: [id])
+  bed            Bed?              @relation(fields: [bedId], references: [id])
+  requestedBy    HousekeepingStaff @relation("BlocksRequested", fields: [requestedById], references: [id])
+  approvedBy     HousekeepingStaff? @relation("BlocksApproved", fields: [approvedById], references: [id])
+  cleaningTask   CleaningTask?     @relation("BlockTask", fields: [cleaningTaskId], references: [id])
+  logs           BlockLog[]
+
+  @@index([organizationId, propertyId, status])
+  @@index([bedId, status])
+  @@index([roomId, status])
+  @@index([startDate, endDate])
+  @@map("room_blocks")
+}
+
+/**
+ * BlockLog — bitácora inmutable de cambios de estado.
+ * staffId es null para eventos del sistema (cron, auto-activación).
+ */
+model BlockLog {
+  id        String        @id @default(uuid())
+  blockId   String        @map("block_id")
+  staffId   String?       @map("staff_id")
+  event     BlockLogEvent
+  note      String?
+  metadata  Json?         // contexto adicional: { previousStatus, reason, etc }
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  block   RoomBlock          @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  staff   HousekeepingStaff? @relation("BlockLogs", fields: [staffId], references: [id], onDelete: SetNull)
+
+  @@index([blockId])
+  @@index([createdAt])
+  @@map("block_logs")
 }

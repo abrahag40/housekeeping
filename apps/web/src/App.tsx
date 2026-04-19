@@ -13,6 +13,7 @@ import { CheckoutsPage } from './pages/CheckoutsPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { DiscrepanciesPage } from './pages/DiscrepanciesPage'
+import { BlocksPage } from './pages/BlocksPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="/kanban"          element={<ProtectedLayout><KanbanPage /></ProtectedLayout>} />
           <Route path="/checkouts"       element={<ProtectedLayout><CheckoutsPage /></ProtectedLayout>} />
           <Route path="/discrepancies"   element={<ProtectedLayout><DiscrepanciesPage /></ProtectedLayout>} />
+          <Route path="/blocks"          element={<ProtectedLayout><BlocksPage /></ProtectedLayout>} />
           <Route path="/reports"         element={<ProtectedLayout><ReportsPage /></ProtectedLayout>} />
           <Route path="/settings/:section?" element={<ProtectedLayout><SettingsPage /></ProtectedLayout>} />
           <Route path="*"                element={<Navigate to="/dashboard" replace />} />

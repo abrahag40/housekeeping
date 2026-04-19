@@ -65,6 +65,7 @@ const NAV: NavItem[] = [
       { to: '/kanban',        icon: '🗂️', label: 'Tareas' },
       { to: '/checkouts',     icon: '🚪', label: 'Checkouts' },
       { to: '/discrepancies', icon: '⚠️', label: 'Discrepancias', showDiscrepancyBadge: true },
+      { to: '/blocks',        icon: '🔒', label: 'Bloqueos' },
       { to: '/reports',       icon: '📊', label: 'Reportes' },
     ],
   },

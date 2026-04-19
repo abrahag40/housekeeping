@@ -14,7 +14,7 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { useTaskStore } from '../../../src/store/tasks'
 import { api } from '../../../src/api/client'
 import type { CleaningTaskDto, CleaningNoteDto } from '@zenix/shared'
-import { CleaningStatus } from '@zenix/shared'
+import { CleaningStatus, TaskType } from '@zenix/shared'
 
 export default function TaskDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
@@ -46,6 +46,7 @@ export default function TaskDetailScreen() {
   const isReady = task.status === CleaningStatus.READY || task.status === CleaningStatus.PENDING
   const isInProgress = task.status === CleaningStatus.IN_PROGRESS || task.status === CleaningStatus.PAUSED
   const isDone = task.status === CleaningStatus.DONE || task.status === CleaningStatus.VERIFIED
+  const isMaintenance = task.taskType === TaskType.MAINTENANCE
 
   async function handleStart() {
     setActionLoading(true)
@@ -112,7 +113,14 @@ export default function TaskDetailScreen() {
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         {/* Room info */}
-        <View style={styles.roomCard}>
+        <View style={[styles.roomCard, isMaintenance && styles.roomCardMaintenance]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            {isMaintenance && (
+              <View style={styles.maintenanceTag}>
+                <Text style={styles.maintenanceTagText}>🔧 Mantenimiento</Text>
+              </View>
+            )}
+          </View>
           <Text style={styles.roomNumber}>{room?.number ?? '—'}</Text>
           <Text style={styles.roomSub}>
             {room?.type === 'PRIVATE' ? 'Habitación privada' : 'Dormitorio compartido'}
@@ -122,6 +130,17 @@ export default function TaskDetailScreen() {
             <Text style={styles.bedLabel}>Cama: {task.bed.label}</Text>
           )}
         </View>
+
+        {/* Maintenance notice banner */}
+        {isMaintenance && (
+          <View style={styles.maintenanceBanner}>
+            <Text style={styles.maintenanceBannerTitle}>Tarea de mantenimiento</Text>
+            <Text style={styles.maintenanceBannerText}>
+              Esta cama/habitación tiene un bloqueo activo. Realiza las tareas indicadas por
+              el supervisor antes de marcar como completada.
+            </Text>
+          </View>
+        )}
 
         {/* Reception notes */}
         {task.bed && (
@@ -339,6 +358,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
+  roomCardMaintenance: {
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+  },
+  maintenanceTag: {
+    backgroundColor: '#FEE2E2',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    alignSelf: 'flex-start',
+  },
+  maintenanceTagText: { fontSize: 12, fontWeight: '600', color: '#B91C1C' },
+  maintenanceBanner: {
+    backgroundColor: '#FFF7ED',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+  },
+  maintenanceBannerTitle: { fontSize: 13, fontWeight: '700', color: '#C2410C', marginBottom: 4 },
+  maintenanceBannerText: { fontSize: 13, color: '#9A3412', lineHeight: 19 },
   roomNumber: { fontSize: 36, fontWeight: '800', color: '#111827' },
   roomSub: { fontSize: 14, color: '#6B7280', marginTop: 4 },
   bedLabel: { fontSize: 13, color: '#9CA3AF', marginTop: 4 },
