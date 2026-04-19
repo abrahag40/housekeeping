@@ -5,6 +5,7 @@ import { AppModule } from './app.module'
 import { HttpExceptionFilter } from './common/filters/http-exception.filter'
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
 import { RolesGuard } from './common/guards/roles.guard'
+import { PropertyScopeInterceptor } from './common/interceptors/property-scope.interceptor'
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true })
@@ -27,6 +28,7 @@ async function bootstrap() {
 
   const reflector = app.get(Reflector)
   app.useGlobalGuards(new JwtAuthGuard(reflector), new RolesGuard(reflector))
+  app.useGlobalInterceptors(new PropertyScopeInterceptor())
   app.useGlobalFilters(new HttpExceptionFilter())
 
   app.setGlobalPrefix('api')
