@@ -47,6 +47,19 @@ export default {
         lg:      'var(--radius-lg)',
         xl:      'var(--radius-xl)',
       },
+      // tailwindcss-animate reads transitionTimingFunction and exposes
+      // ease-* utilities that set --tw-animate-easing (consumed by the
+      // animate-in / animate-out keyframes). Naming the curves avoids
+      // the JIT scanner bug where commas inside cubic-bezier() break
+      // parsing when prefixed with a data-* variant (e.g. data-open:).
+      transitionTimingFunction: {
+        // Spring with ~5% overshoot — y1 = 1.56 > 1.0 causes the panel
+        // to briefly overshoot its rest position before settling.
+        // Approximates iOS UIKit spring / Framer Motion spring(300, 30).
+        spring:     'cubic-bezier(0.22, 1, 0.36, 1)',
+        // Expo-in exit — panel accelerates away cleanly.
+        'sharp-out': 'cubic-bezier(0.55, 0, 1, 0.45)',
+      },
     },
   },
   plugins: [

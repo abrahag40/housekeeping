@@ -24,6 +24,9 @@
  *     switcher IS the way to change context.
  */
 import { useLocation } from 'react-router-dom'
+import { Plus, Calendar, Bell } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { AppDrawer } from './AppDrawer'
 import { PropertySwitcher } from './PropertySwitcher'
 import { UserMenu } from './UserMenu'
@@ -37,6 +40,29 @@ function shouldShowSwitcher(pathname: string): boolean {
   return !ROUTES_WITHOUT_SWITCHER.some((p) => pathname === p || pathname.startsWith(p + '/'))
 }
 
+function NotificationBell({ count = 0 }: { count?: number }) {
+  const hasNew = count > 0
+  return (
+    <button
+      className={cn(
+        'relative flex items-center justify-center',
+        'w-9 h-9 rounded-lg text-slate-500 hover:text-slate-700',
+        'hover:bg-slate-100 transition-colors duration-150',
+      )}
+      aria-label="Notificaciones"
+    >
+      <Bell className="h-5 w-5" strokeWidth={1.75} />
+      {hasNew && (
+        <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <span className="absolute w-9 h-9 rounded-lg bg-red-400/20" style={{ animation: 'radar1 2.5s ease-out infinite' }} />
+          <span className="absolute w-9 h-9 rounded-lg bg-red-400/15" style={{ animation: 'radar2 2.5s ease-out 0.6s infinite' }} />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500 ring-2 ring-white" />
+        </span>
+      )}
+    </button>
+  )
+}
+
 function GlobalTopBar() {
   const { pathname } = useLocation()
   const showSwitcher = shouldShowSwitcher(pathname)
@@ -46,7 +72,20 @@ function GlobalTopBar() {
       <AppDrawer />
       {showSwitcher && <PropertySwitcher />}
       <div className="flex-1" />
-      <UserMenu />
+      <div className="flex items-center gap-1">
+        <Button
+          size="icon"
+          className="h-8 w-8 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white"
+          aria-label="Nueva reserva"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+        <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-600" aria-label="Ir a fecha">
+          <Calendar className="h-4 w-4" />
+        </Button>
+        <NotificationBell count={0} />
+        <UserMenu />
+      </div>
     </div>
   )
 }

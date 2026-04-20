@@ -33,6 +33,7 @@ export interface GuestStayBlock {
   notes?: string
   isLocked?: boolean
   actualCheckout?: Date
+  noShowAt?: Date        // set when the stay is marked as no-show
   otaName?: string
   otaReservationId?: string
   pmsReservationId?: string

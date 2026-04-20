@@ -11,6 +11,7 @@ import {
   DiscrepancyType,
   HousekeepingRole,
   MaintenanceCategory,
+  NoShowChargeStatus,
   PmsMode,
   Priority,
   RoomCategory,
@@ -192,6 +193,43 @@ export interface SseEvent<T = unknown> {
   data: T
 }
 
+// ─── Guest Stay ───────────────────────────────────────────────────────────────
+
+export interface GuestStayDto {
+  id: string
+  propertyId: string
+  roomId: string
+  guestName: string
+  guestEmail: string | null
+  guestPhone: string | null
+  nationality: string | null
+  documentType: string | null
+  documentNumber: string | null
+  paxCount: number
+  checkinAt: string
+  scheduledCheckout: string
+  actualCheckout: string | null
+  ratePerNight: string        // Decimal serialized as string
+  currency: string
+  totalAmount: string
+  amountPaid: string
+  paymentStatus: string
+  source: string | null
+  notes: string | null
+  // No-show fields — all null until markAsNoShow() is called
+  noShowAt: string | null
+  noShowById: string | null
+  noShowReason: string | null
+  noShowFeeAmount: string | null
+  noShowFeeCurrency: string | null
+  noShowChargeStatus: NoShowChargeStatus | null
+  noShowRevertedAt: string | null
+  noShowRevertedById: string | null
+  createdAt: string
+  updatedAt: string
+  room?: RoomDto
+}
+
 // ─── Property Settings ────────────────────────────────────────────────────────
 
 export interface PropertySettingsDto {
@@ -200,7 +238,36 @@ export interface PropertySettingsDto {
   defaultCheckoutTime: string  // "HH:mm"
   timezone: string
   pmsMode: PmsMode
+  noShowCutoffHour: number     // hora local (0-23) a partir de la cual se marca no-show
   updatedAt: string
+}
+
+// ─── No-Show Report ───────────────────────────────────────────────────────────
+
+export interface NoShowItemDto {
+  id: string
+  guestName: string
+  roomNumber: string | null
+  scheduledCheckin: string
+  scheduledCheckout: string
+  noShowAt: string
+  noShowReason: string | null
+  feeAmount: string | null
+  feeCurrency: string | null
+  chargeStatus: NoShowChargeStatus | null
+  source: string | null
+  markedById: string | null
+}
+
+export interface NoShowReportDto {
+  from: string
+  to: string
+  totalNoShows: number
+  noShowRate: number | null          // % de no-shows vs total reservas del período
+  totalFeeRevenue: string            // suma de feeAmount cobrado (CHARGED)
+  totalFeePending: string            // suma de feeAmount en estado PENDING
+  bySource: { source: string; count: number }[]
+  items: NoShowItemDto[]
 }
 
 // ─── Unit Discrepancy ─────────────────────────────────────────────────────────
@@ -263,6 +330,9 @@ export type SseEventType =
   | 'block:expired'
   | 'block:cancelled'
   | 'block:extended'
+  // No-show events
+  | 'stay:no_show'
+  | 'stay:no_show_reverted'
 
 // ─── Offline Sync (Mobile) ────────────────────────────────────────────────────
 

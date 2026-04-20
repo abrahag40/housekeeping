@@ -1,5 +1,5 @@
 /**
- * ReportsService — Reporting & Analytics Module
+ * ReportsService — Reporting & Analytics Module + No-Show Analytics
  *
  * Proporciona tres vistas analíticas para supervisores y gerentes de la propiedad:
  *
@@ -16,6 +16,7 @@
 import { Injectable } from '@nestjs/common'
 import { CleaningStatus, HousekeepingRole } from '@zenix/shared'
 import { PrismaService } from '../prisma/prisma.service'
+import { Decimal } from '@prisma/client/runtime/library'
 
 @Injectable()
 export class ReportsService {
@@ -240,5 +241,117 @@ export class ReportsService {
       })
     }
     return days
+  }
+
+  /**
+   * getNoShowReport — Reporte de no-shows para auditoría y seguimiento de ingresos.
+   *
+   * Propósito:
+   *  Proporciona visibilidad completa sobre huéspedes que no se presentaron:
+   *  quiénes son, cuánto se cobró, tasa de no-show vs total de reservas,
+   *  y distribución por canal de origen (Booking.com vs directo vs walk-in).
+   *
+   * Fuente de datos:
+   *  GuestStay.noShowAt != null — determina que la estadía fue marcada no-show.
+   *  El rango (from/to) filtra por noShowAt (cuándo se marcó), no por checkinAt,
+   *  para coincidir con la operación de auditoría del período contable.
+   *
+   * Métricas clave:
+   *  - noShowRate: (no-shows / total reservas del período) × 100
+   *    Benchmark industria: 5-15% en hoteles urbanos, hasta 25% en hostales con OTA.
+   *    Tasa alta indica necesidad de policy más estricta o depósito obligatorio.
+   *  - totalFeeRevenue: ingresos COBRADOS — relevante para la conciliación contable.
+   *  - totalFeePending: cobros pendientes — requieren seguimiento del recepcionista.
+   *  - bySource: distribución por canal para identificar canales de alto riesgo.
+   *
+   * IMPORTANTE FISCAL (SAT México / DIAN Colombia / SRI Ecuador):
+   *  Los registros de noShowFeeAmount + noShowChargeStatus son inmutables en la BD.
+   *  Este reporte sirve como soporte para la facturación de cargos de no-show,
+   *  que en México deben emitirse como CFDI de ingreso cuando se cobra la primera noche.
+   *  La query incluye CHARGED + PENDING para que contabilidad pueda identificar
+   *  ingresos devengados (PENDING) vs cobrados (CHARGED).
+   */
+  async getNoShowReport(propertyId: string, from: string, to: string) {
+    const fromDate = new Date(from)
+    fromDate.setHours(0, 0, 0, 0)
+    const toDate = new Date(to)
+    toDate.setHours(23, 59, 59, 999)
+
+    // Dos queries en paralelo: no-shows del período + total de reservas para calcular tasa
+    const [noShows, totalStays] = await Promise.all([
+      this.prisma.guestStay.findMany({
+        where: {
+          room: { propertyId },
+          noShowAt: { gte: fromDate, lte: toDate },
+        },
+        select: {
+          id:                true,
+          guestName:         true,
+          checkinAt:         true,
+          scheduledCheckout: true,
+          noShowAt:          true,
+          noShowReason:      true,
+          noShowFeeAmount:   true,
+          noShowFeeCurrency: true,
+          noShowChargeStatus: true,
+          noShowById:        true,
+          source:            true,
+          room: { select: { number: true } },
+        },
+        orderBy: { noShowAt: 'desc' },
+      }),
+      // Total de reservas del período (checkin en el rango) para calcular noShowRate
+      this.prisma.guestStay.count({
+        where: {
+          room: { propertyId },
+          deletedAt: null,
+          checkinAt: { gte: fromDate, lte: toDate },
+        },
+      }),
+    ])
+
+    // Sumar fees por estado de cobro (solo CHARGED y PENDING tienen valor contable)
+    let totalCharged  = new Decimal(0)
+    let totalPending  = new Decimal(0)
+    const sourceCount = new Map<string, number>()
+
+    for (const ns of noShows) {
+      const fee    = ns.noShowFeeAmount ?? new Decimal(0)
+      const status = ns.noShowChargeStatus
+
+      if (status === 'CHARGED')  totalCharged = totalCharged.add(fee)
+      if (status === 'PENDING')  totalPending = totalPending.add(fee)
+
+      const src = ns.source ?? 'DIRECTO'
+      sourceCount.set(src, (sourceCount.get(src) ?? 0) + 1)
+    }
+
+    const noShowRate = totalStays > 0
+      ? Math.round((noShows.length / totalStays) * 1000) / 10  // 1 decimal
+      : null
+
+    return {
+      from,
+      to,
+      totalNoShows:    noShows.length,
+      noShowRate,
+      totalFeeRevenue: totalCharged.toString(),
+      totalFeePending: totalPending.toString(),
+      bySource: Array.from(sourceCount.entries()).map(([source, count]) => ({ source, count })),
+      items: noShows.map((ns) => ({
+        id:               ns.id,
+        guestName:        ns.guestName,
+        roomNumber:       ns.room.number,
+        scheduledCheckin: ns.checkinAt.toISOString(),
+        scheduledCheckout: ns.scheduledCheckout.toISOString(),
+        noShowAt:         ns.noShowAt!.toISOString(),
+        noShowReason:     ns.noShowReason,
+        feeAmount:        ns.noShowFeeAmount?.toString() ?? null,
+        feeCurrency:      ns.noShowFeeCurrency,
+        chargeStatus:     ns.noShowChargeStatus,
+        source:           ns.source,
+        markedById:       ns.noShowById,
+      })),
+    }
   }
 }

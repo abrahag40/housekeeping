@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -13,6 +14,27 @@ import { CreateGuestStayDto } from './dto/create-guest-stay.dto'
 import { MoveRoomDto } from './dto/move-room.dto'
 import type { AvailabilityConflict, RoomAvailabilityResult } from '@zenix/shared'
 import { Prisma } from '@prisma/client'
+
+/** Returns the local date string (YYYY-MM-DD) for a given UTC date in the specified IANA timezone. */
+function toLocalDate(date: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
+/** Returns the local hour (0-23) for a given UTC date in the specified IANA timezone. */
+function toLocalHour(date: Date, timezone: string): number {
+  return Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      hour12: false,
+    }).format(date),
+  )
+}
 
 @Injectable()
 export class GuestStaysService {
@@ -209,8 +231,9 @@ export class GuestStaysService {
       where: {
         roomId,
         organizationId: orgId,
-        deletedAt: null,
+        deletedAt:      null,
         actualCheckout: null,
+        noShowAt:       null, // stays marcados no-show liberan el inventario
         ...(excludeStayId ? { id: { not: excludeStayId } } : {}),
         // Half-open interval overlap: A.start < B.end AND A.end > B.start
         checkinAt:        { lt: checkOut },
@@ -240,6 +263,16 @@ export class GuestStaysService {
     }
 
     return { available: conflicts.length === 0, conflicts }
+  }
+
+  async findOne(stayId: string) {
+    const orgId = this.tenant.getOrganizationId()
+    const stay = await this.prisma.guestStay.findUnique({
+      where: { id: stayId, organizationId: orgId },
+      include: { room: { select: { number: true } } },
+    })
+    if (!stay) throw new NotFoundException('Estadía no encontrada')
+    return stay
   }
 
   async findByProperty(propertyId: string, from?: Date, to?: Date) {
@@ -377,5 +410,324 @@ export class GuestStaysService {
     })
 
     return { success: true }
+  }
+
+  /**
+   * markAsNoShow — Marca una estadía como no-show.
+   *
+   * Precondiciones:
+   *  - La estadía debe estar en estado activo (sin actualCheckout ni noShowAt).
+   *  - La fecha de llegada ya debe haber pasado (no se puede marcar no-show anticipado).
+   *  - Se evalúa la fecha de llegada en la timezone de la propiedad para evitar
+   *    errores por diferencias UTC vs local (crítico para propiedades en UTC-5 a UTC-12).
+   *
+   * Efectos (todos en transacción):
+   *  1. Registra noShowAt, noShowById, noShowReason, fee y chargeStatus en GuestStay.
+   *  2. Libera la habitación (OCCUPIED → AVAILABLE) si no hay otros huéspedes activos.
+   *  3. Cancela tareas de limpieza PENDING/UNASSIGNED de las unidades de la habitación.
+   *  4. Actualiza StayJourney.status → NO_SHOW y registra StayJourneyEvent.
+   *
+   * El cargo (feeAmount) es la primera noche (ratePerNight). Para políticas distintas
+   * se configurará en el futuro via RateCode.noShowPolicy (Roadmap P2-noshow).
+   * El supervisor puede exonerar el cargo con waiveCharge: true.
+   *
+   * IMPORTANTE FISCAL: Este registro es inmutable (no se borra, solo se puede revertir).
+   * noShowFeeAmount + noShowChargeStatus quedan en la auditoría permanente de la estadía.
+   */
+  async markAsNoShow(
+    stayId: string,
+    actorId: string,
+    opts?: { reason?: string; waiveCharge?: boolean },
+  ) {
+    const orgId = this.tenant.getOrganizationId()
+    const stay = await this.prisma.guestStay.findUnique({
+      where: { id: stayId, organizationId: orgId },
+      include: {
+        room: {
+          include: {
+            units: { select: { id: true } },
+            property: { include: { settings: true } },
+          },
+        },
+        stayJourney: { select: { id: true } },
+      },
+    })
+    if (!stay) throw new NotFoundException('Estadía no encontrada')
+    if (stay.actualCheckout) throw new ConflictException('El huésped ya realizó checkout')
+    if (stay.noShowAt)        throw new ConflictException('La estadía ya está marcada como no-show')
+
+    const tz = stay.room.property.settings?.timezone ?? 'UTC'
+    const todayLocal    = toLocalDate(new Date(), tz)
+    const checkinLocal  = toLocalDate(stay.checkinAt, tz)
+    if (checkinLocal > todayLocal) {
+      throw new ConflictException('No se puede marcar no-show antes de la fecha de llegada')
+    }
+
+    const feeAmount    = opts?.waiveCharge ? new Prisma.Decimal(0) : stay.ratePerNight
+    const chargeStatus = opts?.waiveCharge ? 'WAIVED' : 'PENDING'
+
+    const now = new Date()
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Marcar la estadía
+      await tx.guestStay.update({
+        where: { id: stayId },
+        data: {
+          noShowAt:          now,
+          noShowById:        actorId,
+          noShowReason:      opts?.reason ?? null,
+          noShowFeeAmount:   feeAmount,
+          noShowFeeCurrency: stay.currency,
+          noShowChargeStatus: chargeStatus,
+        },
+      })
+
+      // 2. Liberar habitación si no hay otros huéspedes activos
+      const othersActive = await tx.guestStay.count({
+        where: {
+          roomId:       stay.roomId,
+          organizationId: orgId,
+          deletedAt:    null,
+          actualCheckout: null,
+          noShowAt:     null,
+          id: { not: stayId },
+        },
+      })
+      if (othersActive === 0 && stay.room.status === 'OCCUPIED') {
+        await tx.room.update({ where: { id: stay.roomId }, data: { status: 'AVAILABLE' } })
+        await tx.roomStatusLog.create({
+          data: {
+            organizationId: orgId,
+            propertyId: stay.propertyId,
+            roomId:     stay.roomId,
+            fromStatus: 'OCCUPIED',
+            toStatus:   'AVAILABLE',
+            changedById: actorId,
+            reason:     `No-show: ${stay.guestName}`,
+          },
+        })
+      }
+
+      // 3. Cancelar tareas de limpieza activas de las unidades de la habitación
+      //    Solo cancela PENDING/UNASSIGNED/READY — las IN_PROGRESS las deja (equipo supervisará)
+      const unitIds = stay.room.units.map((u) => u.id)
+      if (unitIds.length > 0) {
+        const dayStart = new Date(`${todayLocal}T00:00:00.000Z`)
+        const dayEnd   = new Date(`${todayLocal}T23:59:59.999Z`)
+        await tx.cleaningTask.updateMany({
+          where: {
+            unitId: { in: unitIds },
+            status: { in: ['PENDING', 'UNASSIGNED', 'READY'] },
+            createdAt: { gte: dayStart, lte: dayEnd },
+          },
+          data: { status: 'CANCELLED' },
+        })
+      }
+
+      // 4. Actualizar StayJourney si existe
+      if (stay.stayJourney?.id) {
+        await tx.stayJourney.update({
+          where: { id: stay.stayJourney.id },
+          data: { status: 'NO_SHOW' },
+        })
+        await tx.stayJourneyEvent.create({
+          data: {
+            journeyId: stay.stayJourney.id,
+            eventType: 'NO_SHOW_MARKED',
+            actorId,
+            payload: {
+              reason:      opts?.reason ?? null,
+              feeAmount:   feeAmount.toString(),
+              chargeStatus,
+              markedAt:    now.toISOString(),
+            },
+          },
+        })
+      }
+    })
+
+    this.events.emit('stay.no_show', {
+      stayId,
+      roomId:     stay.roomId,
+      propertyId: stay.propertyId,
+      orgId,
+      guestName:  stay.guestName,
+    })
+
+    this.logger.log(`No-show marcado: stay=${stayId} guest="${stay.guestName}" fee=${feeAmount} ${chargeStatus}`)
+    return { success: true, feeAmount: feeAmount.toString(), chargeStatus }
+  }
+
+  /**
+   * revertNoShow — Revierte un no-show dentro de la ventana de 48 horas.
+   *
+   * Casos de uso: vuelo retrasado, error del recepcionista, huésped llega tarde.
+   *
+   * Ventana de gracia de 48h: alineada con ISAHC (Int'l Society of Hospitality Consultants)
+   * y práctica de Mews/Clock PMS+. Pasadas las 48h, la reversión solo puede hacerla
+   * un manager manualmente a nivel de BD (fuera de scope de la app).
+   *
+   * El cargo (si ya procesado) se pone en estado PENDING para revisión manual;
+   * no se hace refund automático (requiere integración de pasarela).
+   */
+  async revertNoShow(stayId: string, actorId: string) {
+    const orgId = this.tenant.getOrganizationId()
+    const stay = await this.prisma.guestStay.findUnique({
+      where: { id: stayId, organizationId: orgId },
+      include: {
+        stayJourney: { select: { id: true } },
+      },
+    })
+    if (!stay) throw new NotFoundException('Estadía no encontrada')
+    if (!stay.noShowAt) throw new ConflictException('La estadía no está marcada como no-show')
+
+    const hoursSince = (Date.now() - stay.noShowAt.getTime()) / 3_600_000
+    if (hoursSince > 48) {
+      throw new ForbiddenException('La ventana de reversión de 48 horas ha expirado')
+    }
+
+    const now = new Date()
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.guestStay.update({
+        where: { id: stayId },
+        data: {
+          noShowAt:          null,
+          noShowById:        null,
+          noShowReason:      null,
+          noShowFeeAmount:   null,
+          noShowFeeCurrency: null,
+          // Si el cargo estaba CHARGED lo ponemos PENDING para revisión manual
+          noShowChargeStatus: stay.noShowChargeStatus === 'CHARGED' ? 'PENDING' : null,
+          noShowRevertedAt:   now,
+          noShowRevertedById: actorId,
+        },
+      })
+
+      // Restaurar habitación a OCCUPIED si no hay otra razón para que esté disponible
+      const room = await tx.room.findUnique({ where: { id: stay.roomId }, select: { status: true } })
+      if (room?.status === 'AVAILABLE') {
+        await tx.room.update({ where: { id: stay.roomId }, data: { status: 'OCCUPIED' } })
+        await tx.roomStatusLog.create({
+          data: {
+            organizationId: orgId,
+            propertyId: stay.propertyId,
+            roomId:     stay.roomId,
+            fromStatus: 'AVAILABLE',
+            toStatus:   'OCCUPIED',
+            changedById: actorId,
+            reason:     `No-show revertido: ${stay.guestName}`,
+          },
+        })
+      }
+
+      if (stay.stayJourney?.id) {
+        await tx.stayJourney.update({
+          where: { id: stay.stayJourney.id },
+          data: { status: 'ACTIVE' },
+        })
+        await tx.stayJourneyEvent.create({
+          data: {
+            journeyId: stay.stayJourney.id,
+            eventType: 'NO_SHOW_REVERTED',
+            actorId,
+            payload: { revertedAt: now.toISOString() },
+          },
+        })
+      }
+    })
+
+    this.events.emit('stay.no_show_reverted', {
+      stayId,
+      roomId:     stay.roomId,
+      propertyId: stay.propertyId,
+      orgId,
+    })
+
+    this.logger.log(`No-show revertido: stay=${stayId}`)
+    return { success: true }
+  }
+
+  // ─── Helpers exposed for night-audit scheduler ────────────────────────────
+
+  /** Exported so NightAuditScheduler can call it without tenant context (system actor). */
+  async markAsNoShowSystem(stayId: string, orgId: string, propertyId: string) {
+    const stay = await this.prisma.guestStay.findUnique({
+      where: { id: stayId },
+      include: {
+        room: { include: { units: { select: { id: true } }, property: { include: { settings: true } } } },
+        stayJourney: { select: { id: true } },
+      },
+    })
+    if (!stay || stay.actualCheckout || stay.noShowAt) return
+
+    const tz = stay.room.property.settings?.timezone ?? 'UTC'
+    const todayLocal = toLocalDate(new Date(), tz)
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.guestStay.update({
+        where: { id: stayId },
+        data: {
+          noShowAt:           new Date(),
+          noShowChargeStatus: 'PENDING',
+          noShowFeeAmount:    stay.ratePerNight,
+          noShowFeeCurrency:  stay.currency,
+          noShowReason:       'Marcado automáticamente por night audit',
+        },
+      })
+
+      const othersActive = await tx.guestStay.count({
+        where: {
+          roomId:        stay.roomId,
+          organizationId: orgId,
+          deletedAt:     null,
+          actualCheckout: null,
+          noShowAt:      null,
+          id: { not: stayId },
+        },
+      })
+      if (othersActive === 0 && stay.room.status === 'OCCUPIED') {
+        await tx.room.update({ where: { id: stay.roomId }, data: { status: 'AVAILABLE' } })
+        await tx.roomStatusLog.create({
+          data: {
+            organizationId: orgId,
+            propertyId,
+            roomId:     stay.roomId,
+            fromStatus: 'OCCUPIED',
+            toStatus:   'AVAILABLE',
+            changedById: 'system',
+            reason:     `No-show automático (night audit): ${stay.guestName}`,
+          },
+        })
+      }
+
+      const unitIds = stay.room.units.map((u) => u.id)
+      if (unitIds.length > 0) {
+        const dayStart = new Date(`${todayLocal}T00:00:00.000Z`)
+        const dayEnd   = new Date(`${todayLocal}T23:59:59.999Z`)
+        await tx.cleaningTask.updateMany({
+          where: {
+            unitId: { in: unitIds },
+            status: { in: ['PENDING', 'UNASSIGNED', 'READY'] },
+            createdAt: { gte: dayStart, lte: dayEnd },
+          },
+          data: { status: 'CANCELLED' },
+        })
+      }
+
+      if (stay.stayJourney?.id) {
+        await tx.stayJourney.update({ where: { id: stay.stayJourney.id }, data: { status: 'NO_SHOW' } })
+        await tx.stayJourneyEvent.create({
+          data: {
+            journeyId: stay.stayJourney.id,
+            eventType: 'NO_SHOW_MARKED',
+            actorId:   null,
+            payload:   { source: 'NIGHT_AUDIT', markedAt: new Date().toISOString() },
+          },
+        })
+      }
+    })
+
+    this.logger.log(`[NightAudit] No-show automático: stay=${stayId} guest="${stay.guestName}"`)
   }
 }

@@ -941,8 +941,13 @@ function RoomAccordion({
           </svg>
         </div>
       </button>
-      <div id={`room-panel-${roomId}`} hidden={!expanded}>
-        {children}
+      <div
+        id={`room-panel-${roomId}`}
+        className={`grid transition-[grid-template-rows] duration-[220ms] ease-spring motion-reduce:duration-0 ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
+      >
+        <div className="overflow-hidden">
+          {children}
+        </div>
       </div>
     </div>
   )
@@ -1578,11 +1583,11 @@ function DepartureModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm "
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden"
+        className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden "
         onClick={(e) => e.stopPropagation()}
       >
         <div className={`px-5 py-4 border-b border-gray-100 ${isUrgent ? 'bg-red-50' : 'bg-indigo-50'}`}>
@@ -1654,11 +1659,11 @@ function CancelModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm "
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden"
+        className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden "
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
@@ -1724,11 +1729,11 @@ function UndoModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm "
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden"
+        className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden "
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 border-b border-gray-100 bg-amber-50">

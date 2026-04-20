@@ -40,6 +40,7 @@ function adaptStay(raw: Record<string, unknown>): GuestStayBlock {
     notes:            raw.notes as string | undefined,
     isLocked:         false,
     actualCheckout:   raw.actualCheckout ? new Date(raw.actualCheckout as string) : undefined,
+    noShowAt:         raw.noShowAt ? new Date(raw.noShowAt as string) : undefined,
   }
 }
 
@@ -192,6 +193,45 @@ export function useMoveRoom(propertyId: string) {
     },
     onError: (err: Error) => {
       toast.error(err.message ?? 'No se pudo mover la reserva')
+    },
+  })
+}
+
+export function useMarkNoShow(propertyId: string) {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      stayId,
+      reason,
+      waiveCharge,
+    }: {
+      stayId: string
+      reason?: string
+      waiveCharge?: boolean
+    }) => api.post(`/v1/guest-stays/${stayId}/no-show`, { reason, waiveCharge }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      toast.success('No-show registrado')
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo marcar no-show')
+    },
+  })
+}
+
+export function useRevertNoShow(propertyId: string) {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: (stayId: string) =>
+      api.post(`/v1/guest-stays/${stayId}/revert-no-show`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      toast.success('No-show revertido')
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo revertir el no-show')
     },
   })
 }

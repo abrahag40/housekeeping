@@ -42,9 +42,11 @@ const SheetOverlay = React.forwardRef<
       // like it's "arriving" vs "leaving" rather than a linear blend.
       className={cn(
         "fixed inset-0 z-50 bg-black/40",
-        "duration-[280ms] motion-reduce:duration-0",
-        "data-open:animate-in data-open:fade-in-0 data-open:ease-out",
-        "data-closed:animate-out data-closed:fade-out-0 data-closed:ease-in",
+        "motion-reduce:duration-0",
+        // Overlay fade: entra suave (240ms), sale más rápido (180ms).
+        // No necesita spring — es un elemento de fondo, no interactivo.
+        "data-[state=open]:animate-in  data-[state=open]:fade-in-0  data-[state=open]:duration-[240ms]  data-[state=open]:ease-out",
+        "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-[180ms] data-[state=closed]:ease-in",
         className
       )}
       {...props}
@@ -73,30 +75,46 @@ const SheetContent = React.forwardRef<
           "data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-r data-[side=left]:sm:max-w-sm",
           "data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-l data-[side=right]:sm:max-w-sm",
           "data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b",
-          // Motion — 280 ms per side, slide from the full drawer width
-          // (slide-in-from-*-full) so the panel visibly arrives from
-          // off-screen instead of popping in with a 40 px nudge. NN/G
-          // recommends asymmetric easing: ease-out on entry ("arriving
-          // and settling"), ease-in on exit ("accelerating away"). Full
-          // accessibility fallback via motion-reduce:* — users with
-          // prefers-reduced-motion see an instant transition.
-          "duration-[280ms] motion-reduce:duration-0",
-          "data-open:animate-in data-open:ease-out",
-          "data-closed:animate-out data-closed:ease-in",
+          // Motion — spring physics para entrada, salida rápida asimétrica.
+          //
+          // OPEN  (360 ms): cubic-bezier(0.34, 1.56, 0.64, 1)
+          //   y1 = 1.56 > 1.0 → overshoot del ~5%: el panel llega hasta su
+          //   posición final y la sobrepasa levemente antes de asentarse.
+          //   Es la aproximación CSS del spring de Framer Motion / iOS UIKit.
+          //   Fuentes: Framer docs "spring stiffness:300 damping:30",
+          //   Apple HIG "Use spring animations for elements entering the screen".
+          //
+          // CLOSE (220 ms): cubic-bezier(0.4, 0, 0.8, 0.4)
+          //   Sale con aceleración inicial brusca — se "va rápido".
+          //   Asimetría open/close recomendada por NN/G y Material Design 3:
+          //   la salida es siempre ~40% más corta que la entrada.
+          //
+          // SCALE: empieza en 0.97 y crece a 1.0 al abrir (y viceversa).
+          //   Añade una dimensión sutil — el panel parece "emerger hacia el
+          //   usuario" en vez de simplemente deslizarse.
+          //
+          // motion-reduce: duración 0 para accesibilidad (epilepsia/vértigo).
+          "motion-reduce:duration-0",
+          // Timing via CSS vars (--ease-spring / --ease-sharp-out en index.css).
+          // Radix setea data-state="open/closed", NO data-open/data-closed —
+          // por eso se usa data-[state=open]: (selector explícito) en lugar
+          // de data-open: (que esperaría un atributo [data-open] distinto).
+          "data-[state=open]:animate-in  data-[state=open]:duration-[380ms] data-[state=open]:[animation-timing-function:var(--ease-spring)]",
+          "data-[state=closed]:animate-out data-[state=closed]:duration-[220ms] data-[state=closed]:[animation-timing-function:var(--ease-sharp-out)]",
           // Arbitrary CSS variables drive the translate — keeps the
           // slide amount at 100% of the panel regardless of the
           // viewport-dependent width (w-3/4 on phones, max-w-sm on
           // desktop). tailwindcss-animate consumes --tw-enter-* and
           // --tw-exit-* vars through its `animate-in` / `animate-out`
           // keyframes.
-          "data-[side=left]:data-open:[--tw-enter-translate-x:-100%]",
-          "data-[side=left]:data-closed:[--tw-exit-translate-x:-100%]",
-          "data-[side=right]:data-open:[--tw-enter-translate-x:100%]",
-          "data-[side=right]:data-closed:[--tw-exit-translate-x:100%]",
-          "data-[side=top]:data-open:[--tw-enter-translate-y:-100%]",
-          "data-[side=top]:data-closed:[--tw-exit-translate-y:-100%]",
-          "data-[side=bottom]:data-open:[--tw-enter-translate-y:100%]",
-          "data-[side=bottom]:data-closed:[--tw-exit-translate-y:100%]",
+          "data-[side=left]:data-[state=open]:[--tw-enter-translate-x:-100%]",
+          "data-[side=left]:data-[state=closed]:[--tw-exit-translate-x:-100%]",
+          "data-[side=right]:data-[state=open]:[--tw-enter-translate-x:100%]",
+          "data-[side=right]:data-[state=closed]:[--tw-exit-translate-x:100%]",
+          "data-[side=top]:data-[state=open]:[--tw-enter-translate-y:-100%]",
+          "data-[side=top]:data-[state=closed]:[--tw-exit-translate-y:-100%]",
+          "data-[side=bottom]:data-[state=open]:[--tw-enter-translate-y:100%]",
+          "data-[side=bottom]:data-[state=closed]:[--tw-exit-translate-y:100%]",
           // Soft drop shadows on each side for depth perception.
           "data-[side=left]:shadow-[20px_0_60px_rgba(0,0,0,0.18),_4px_0_16px_rgba(0,0,0,0.08)]",
           "data-[side=right]:shadow-[-20px_0_60px_rgba(0,0,0,0.18),_-4px_0_16px_rgba(0,0,0,0.08)]",

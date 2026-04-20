@@ -15,6 +15,7 @@ interface BookingsLayerProps {
   onDragStart: (stayId: string, clientX: number, clientY: number) => void
   onStayClick: (stayId: string) => void
   onCheckout: (stayId: string) => void
+  onNoShow?: (stayId: string) => void
   lockedStays?: Set<string>
   onToggleLock?: (stayId: string) => void
   scrollLeft?: number
@@ -104,6 +105,7 @@ export function BookingsLayer({
   onDragStart,
   onStayClick,
   onCheckout,
+  onNoShow,
   lockedStays,
   onToggleLock,
   scrollLeft = 0,
@@ -235,15 +237,47 @@ export function BookingsLayer({
         circle.setAttribute('fill', '#378ADD')
         svg.appendChild(circle)
       }
+
+      // For far-apart rows, add room-label anchors so the user knows
+      // where the connection goes even when one endpoint is off-screen.
+      const FAR_ROW_THRESHOLD = 180
+      if (Math.abs(a.y - b.y) > FAR_ROW_THRESHOLD) {
+        const labelStyle = { fill: '#378ADD', fontSize: '9', fontWeight: '700', fontFamily: 'inherit' }
+
+        if (curr.roomNumber) {
+          const tA = document.createElementNS(SVG_NS, 'text')
+          Object.entries({ ...labelStyle, x: String(a.rightX + 7), y: String(a.y + 3) })
+            .forEach(([k, v]) => tA.setAttribute(k, v))
+          tA.textContent = `→ Hab. ${curr.roomNumber}`
+          svg.appendChild(tA)
+        }
+
+        if (prev.roomNumber) {
+          const tB = document.createElementNS(SVG_NS, 'text')
+          Object.entries({ ...labelStyle, x: String(b.leftX - 7), y: String(b.y + 3), 'text-anchor': 'end' })
+            .forEach(([k, v]) => tB.setAttribute(k, v))
+          tB.textContent = `← Hab. ${prev.roomNumber}`
+          svg.appendChild(tB)
+        }
+      }
     }
 
     svg.style.opacity = drew ? '1' : '0'
   }, [activeJourneyId, stays, journeyStays])
 
   function handleBlockClick(stay: GuestStayBlock) {
-    // Journey blocks: highlight their journey (shows SVG connector lines).
-    // Regular blocks: clear any active journey highlight.
-    onSetActiveJourneyId(stay.journeyId ?? null)
+    if (stay.journeyId) {
+      // Segment block: activate its own journey.
+      onSetActiveJourneyId(stay.journeyId)
+    } else {
+      // Regular block: check if it is a predecessor for any journey segment.
+      // This makes the SVG highlight bidirectional — clicking the first block works too.
+      const allStays = [...stays, ...journeyStays]
+      const asSegment = journeyStays.find(
+        (seg) => findPredecessor(seg, allStays)?.id === stay.id,
+      )
+      onSetActiveJourneyId(asSegment?.journeyId ?? null)
+    }
     onStayClick(stay.id)
   }
 
@@ -305,6 +339,7 @@ export function BookingsLayer({
             onDragStart={onDragStart}
             onClick={() => handleBlockClick(stay)}
             onCheckout={onCheckout}
+            onNoShow={onNoShow}
             isLocked={lockedStays?.has(stay.id)}
             onToggleLock={onToggleLock}
             scrollLeft={scrollLeft}
@@ -328,6 +363,7 @@ export function BookingsLayer({
             onDragStart={onDragStart}
             onClick={() => handleBlockClick(stay)}
             onCheckout={onCheckout}
+            onNoShow={onNoShow}
             isLocked={lockedStays?.has(stay.id)}
             onToggleLock={onToggleLock}
             scrollLeft={scrollLeft}

@@ -58,14 +58,14 @@ export function DateHeader({ virtualColumns, totalWidth, dayWidth }: DateHeaderP
                 key={vc.key}
                 className={cn(
                   'absolute top-0 flex flex-col items-center justify-center border-r border-slate-100',
-                  h.isToday && 'bg-brand-50',
+                  h.isToday && 'bg-emerald-50',
                 )}
                 style={{ left: vc.start, width: vc.size, height: TIMELINE.HEADER_HEIGHT - 24 }}
               >
                 <span
                   className={cn(
                     'text-[8px] font-mono leading-none',
-                    h.isToday ? 'text-brand-700 font-bold' : 'text-slate-400',
+                    h.isToday ? 'text-emerald-700 font-bold' : 'text-slate-400',
                   )}
                 >
                   {h.dayNum}
@@ -79,7 +79,7 @@ export function DateHeader({ virtualColumns, totalWidth, dayWidth }: DateHeaderP
               key={vc.key}
               className={cn(
                 'absolute top-0 flex flex-col items-center justify-center border-r border-slate-100',
-                h.isToday && 'bg-brand-50',
+                h.isToday && 'bg-emerald-50',
               )}
               style={{ left: vc.start, width: vc.size, height: TIMELINE.HEADER_HEIGHT - 24 }}
             >
@@ -87,7 +87,7 @@ export function DateHeader({ virtualColumns, totalWidth, dayWidth }: DateHeaderP
               <span
                 className={cn(
                   'text-[10px] leading-none',
-                  h.isToday ? 'text-brand-700 font-semibold' : 'text-slate-400',
+                  h.isToday ? 'text-emerald-700 font-semibold' : 'text-slate-400',
                 )}
               >
                 {dayWidth >= 32 ? h.dayName : h.dayName.charAt(0)}
@@ -98,7 +98,7 @@ export function DateHeader({ virtualColumns, totalWidth, dayWidth }: DateHeaderP
                 className={cn(
                   'text-sm font-semibold leading-tight mt-0.5',
                   h.isToday
-                    ? 'text-white bg-brand-600 rounded-full w-6 h-6 flex items-center justify-center text-xs'
+                    ? 'text-white bg-emerald-600 rounded-full w-6 h-6 flex items-center justify-center text-xs'
                     : 'text-slate-700',
                 )}
               >

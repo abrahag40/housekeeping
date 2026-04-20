@@ -1,10 +1,11 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import {
   User,
-  CreditCard,
   MapPin,
   Moon,
   Users,
@@ -13,9 +14,13 @@ import {
   FileText,
   LogOut,
   ArrowRightLeft,
+  UserX,
+  RotateCcw,
+  ExternalLink,
+  X,
 } from 'lucide-react'
 
-import { format, differenceInDays } from 'date-fns'
+import { format, differenceInDays, differenceInHours } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
 
@@ -35,6 +40,8 @@ interface BookingDetailSheetProps {
   onClose: () => void
   onCheckout: (stayId: string) => void
   onMoveRoom: (stayId: string) => void
+  onNoShow: (stayId: string, opts: { reason?: string; waiveCharge?: boolean }) => void
+  onRevertNoShow: (stayId: string) => void
 }
 
 export function BookingDetailSheet({
@@ -43,12 +50,26 @@ export function BookingDetailSheet({
   onClose,
   onCheckout,
   onMoveRoom,
+  onNoShow,
+  onRevertNoShow,
 }: BookingDetailSheetProps) {
+  const navigate = useNavigate()
+  const [showNoShowConfirm, setShowNoShowConfirm] = useState(false)
+  const [noShowReason, setNoShowReason] = useState('')
+  const [waiveCharge, setWaiveCharge] = useState(false)
+
   if (!stay) return null
 
   const status = getStayStatus(stay.checkIn, stay.checkOut, stay.actualCheckout)
   const statusColors = STAY_STATUS_COLORS[status]
   const otaColor = OTA_ACCENT_COLORS[stay.source] ?? OTA_ACCENT_COLORS.other
+
+  // No-show eligibility rules:
+  //  - ARRIVING: arrival date is today or past, guest never checked in → can mark no-show
+  //  - noShowAt set: already a no-show — show revert button within 48h window
+  const isNoShow  = !!stay.noShowAt
+  const canRevert = isNoShow && differenceInHours(new Date(), stay.noShowAt!) < 48
+  const canNoShow = !isNoShow && (status === 'ARRIVING' || status === 'IN_HOUSE')
 
   const nights = differenceInDays(
     new Date(stay.checkOut),
@@ -88,22 +109,28 @@ export function BookingDetailSheet({
               </SheetTitle>
 
               <div className="flex items-center gap-2 mt-1">
-                <span
-                  className="text-xs font-semibold px-2 py-0.5 rounded-full"
-                  style={{
-                    backgroundColor: `${otaColor}20`,
-                    color: otaColor,
-                    border: `1px solid ${otaColor}40`,
-                  }}
-                >
-                  {status === 'IN_HOUSE'
-                    ? 'Alojado'
-                    : status === 'ARRIVING'
-                    ? 'Por llegar'
-                    : status === 'DEPARTING'
-                    ? 'Sale hoy'
-                    : 'Salió'}
-                </span>
+                {isNoShow ? (
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                    No-show
+                  </span>
+                ) : (
+                  <span
+                    className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: `${otaColor}20`,
+                      color: otaColor,
+                      border: `1px solid ${otaColor}40`,
+                    }}
+                  >
+                    {status === 'IN_HOUSE'
+                      ? 'Alojado'
+                      : status === 'ARRIVING'
+                      ? 'Por llegar'
+                      : status === 'DEPARTING'
+                      ? 'Sale hoy'
+                      : 'Salió'}
+                  </span>
+                )}
 
                 {stay.otaName && (
                   <span
@@ -115,6 +142,30 @@ export function BookingDetailSheet({
                 )}
               </div>
             </div>
+
+            {/* Header controls: full-page link + close */}
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                onClick={() => {
+                  onClose()
+                  navigate(`/reservations/${stay.id}`)
+                }}
+                className="flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-md transition-colors"
+                style={{ color: `${statusColors.text}99` }}
+                title="Ver reserva completa"
+              >
+                <ExternalLink className="h-3 w-3" />
+                <span className="hidden sm:inline">Ver completa</span>
+              </button>
+              <button
+                onClick={onClose}
+                className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
+                style={{ color: `${statusColors.text}99` }}
+                aria-label="Cerrar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -124,24 +175,31 @@ export function BookingDetailSheet({
           style={{ backgroundColor: otaColor }}
         />
 
-        <div className="flex-1 overflow-y-auto">
-          <Tabs defaultValue="stay" className="h-full flex flex-col">
-            <TabsList className="w-full rounded-none border-b px-4 bg-white h-10">
-              <TabsTrigger value="stay" className="flex-1 text-xs">
-                Estadía
-              </TabsTrigger>
-
-              <TabsTrigger value="payment" className="flex-1 text-xs">
-                Pago
-              </TabsTrigger>
-
-              <TabsTrigger value="guest" className="flex-1 text-xs">
-                Huésped
-              </TabsTrigger>
+        {/* Tabs: list OUTSIDE the scroll area so it stays fixed while content scrolls */}
+        <Tabs defaultValue="stay" className="flex-1 flex flex-col min-h-0">
+          <div className="px-4 py-3 shrink-0">
+            <TabsList className="w-full h-9 bg-slate-100 rounded-xl p-1 grid grid-cols-3">
+              {(['stay', 'payment', 'guest'] as const).map((v) => (
+                <TabsTrigger
+                  key={v}
+                  value={v}
+                  className={cn(
+                    'rounded-lg text-xs font-medium transition-all',
+                    'text-slate-500',
+                    'data-[state=active]:bg-white data-[state=active]:shadow-sm',
+                    'data-[state=active]:text-slate-900 data-[state=active]:font-semibold',
+                  )}
+                >
+                  {v === 'stay' ? 'Estadía' : v === 'payment' ? 'Pago' : 'Huésped'}
+                </TabsTrigger>
+              ))}
             </TabsList>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
 
             {/* TAB ESTADÍA */}
-            <TabsContent value="stay" className="mt-0 overflow-y-auto">
+            <TabsContent value="stay" className="mt-0 ">
               <div className="p-4 space-y-3">
                 {/* Fechas */}
                 <div className="bg-slate-50 rounded-xl p-4">
@@ -277,7 +335,7 @@ export function BookingDetailSheet({
             </TabsContent>
 
             {/* TAB PAYMENT */}
-            <TabsContent value="payment" className="mt-0 flex-1 overflow-y-auto">
+            <TabsContent value="payment" className="mt-0 ">
               <div className="bg-slate-50 rounded-lg p-4 space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-slate-500">
@@ -350,7 +408,7 @@ export function BookingDetailSheet({
             </TabsContent>
 
             {/* TAB GUEST */}
-            <TabsContent value="guest" className="mt-0 flex-1 overflow-y-auto">
+            <TabsContent value="guest" className="mt-0 ">
               <div className="p-4 space-y-2">
                 {[
                   { icon: User, label: 'Nombre', value: stay.guestName },
@@ -389,23 +447,100 @@ export function BookingDetailSheet({
                   ))}
               </div>
             </TabsContent>
-          </Tabs>
-        </div>
+          </div>
+        </Tabs>
 
         {/* FOOTER */}
-        <div className="flex-shrink-0 border-t border-slate-200 p-3 bg-white">
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1 text-xs"
-              onClick={() => onMoveRoom(stay.id)}
-            >
-              <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
-              Mover hab.
-            </Button>
+        <div className="flex-shrink-0 border-t border-slate-200 p-3 bg-white space-y-2">
+          {/* No-show confirm panel (inline — no separate Dialog) */}
+          {showNoShowConfirm && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2.5 ">
+              <p className="text-xs font-semibold text-red-800">
+                Marcar como no-show — cargo estimado: {stay.currency} {Number(stay.ratePerNight).toFixed(2)}
+              </p>
+              <input
+                type="text"
+                placeholder="Razón (opcional)"
+                value={noShowReason}
+                onChange={(e) => setNoShowReason(e.target.value)}
+                className="w-full text-xs border border-red-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-red-300"
+              />
+              <label className="flex items-center gap-2 text-xs text-red-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={waiveCharge}
+                  onChange={(e) => setWaiveCharge(e.target.checked)}
+                  className="rounded"
+                />
+                Exonerar cargo (supervisor)
+              </label>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 text-xs"
+                  onClick={() => setShowNoShowConfirm(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 text-xs bg-red-600 hover:bg-red-700 text-white"
+                  onClick={() => {
+                    onNoShow(stay.id, { reason: noShowReason || undefined, waiveCharge })
+                    setShowNoShowConfirm(false)
+                    setNoShowReason('')
+                    setWaiveCharge(false)
+                    onClose()
+                  }}
+                >
+                  Confirmar no-show
+                </Button>
+              </div>
+            </div>
+          )}
 
-            {(status === 'IN_HOUSE' || status === 'DEPARTING') && (
+          <div className="flex gap-2 flex-wrap">
+            {!isNoShow && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-xs"
+                onClick={() => onMoveRoom(stay.id)}
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
+                Mover hab.
+              </Button>
+            )}
+
+            {canNoShow && !showNoShowConfirm && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-xs border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                onClick={() => setShowNoShowConfirm(true)}
+              >
+                <UserX className="h-3.5 w-3.5 mr-1.5" />
+                No-show
+              </Button>
+            )}
+
+            {canRevert && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-xs border-amber-200 text-amber-700 hover:bg-amber-50"
+                onClick={() => {
+                  onRevertNoShow(stay.id)
+                  onClose()
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                Revertir no-show
+              </Button>
+            )}
+
+            {!isNoShow && (status === 'IN_HOUSE' || status === 'DEPARTING') && (
               <Button
                 size="sm"
                 className={cn(

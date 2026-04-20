@@ -4,7 +4,7 @@ import { subDays, addDays, differenceInDays } from 'date-fns'
 import { useTimelineStore } from '../../stores/timeline.store'
 import { TIMELINE } from '../../utils/timeline.constants'
 import { useDragDrop } from '../../hooks/useDragDrop'
-import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useRoomReadinessTasks } from '../../hooks/useGuestStays'
+import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useMarkNoShow, useRevertNoShow, useRoomReadinessTasks } from '../../hooks/useGuestStays'
 import { useStayJourneys } from '../../hooks/useStayJourneys'
 import { useRoomSSE } from '../../hooks/useRoomSSE'
 import { useDateVirtualizer } from '../../hooks/useDateVirtualizer'
@@ -21,6 +21,7 @@ import { BookingDetailSheet } from '../dialogs/BookingDetailSheet'
 import { CheckInDialog } from '../dialogs/CheckInDialog'
 import type { NewStayData } from '../dialogs/CheckInDialog'
 import { CheckOutDialog } from '../dialogs/CheckOutDialog'
+import { NoShowConfirmModal } from './NoShowConfirmModal'
 import type {
   FlatRow,
   DropResult,
@@ -181,9 +182,11 @@ export function TimelineScheduler() {
     dataWindow.from,
     dataWindow.to,
   )
-  const createStay  = useCreateGuestStay(PROPERTY_ID)
-  const checkoutMut = useCheckout(PROPERTY_ID)
-  const moveRoomMut = useMoveRoom(PROPERTY_ID)
+  const createStay     = useCreateGuestStay(PROPERTY_ID)
+  const checkoutMut    = useCheckout(PROPERTY_ID)
+  const moveRoomMut    = useMoveRoom(PROPERTY_ID)
+  const markNoShowMut  = useMarkNoShow(PROPERTY_ID)
+  const revertNoShowMut = useRevertNoShow(PROPERTY_ID)
 
   const { journeyBlocks } = useStayJourneys(PROPERTY_ID, dataWindow.from, dataWindow.to)
 
@@ -228,6 +231,11 @@ export function TimelineScheduler() {
   const [checkOutDialog, setCheckOutDialog] = useState<{
     open: boolean; stayId: string | null
   }>({ open: false, stayId: null })
+
+  const [noShowDialog, setNoShowDialog] = useState<{ stayId: string } | null>(null)
+  const noShowTarget = noShowDialog
+    ? ([...stays, ...journeyBlocks].find((s) => s.id === noShowDialog.stayId) ?? null)
+    : null
 
   // ─── Drag & Drop ────────────────────────────────────────────
   const [ghostPosition, setGhostPosition] = useState({ x: -9999, y: -9999 })
@@ -356,8 +364,9 @@ export function TimelineScheduler() {
             />
           </div>
 
-          {/* Grid + bookings */}
-          <div className="relative flex-shrink-0" style={{ width: totalWidth }}>
+          {/* Grid + bookings — z-0 creates an isolated stacking context so the
+              sticky room column (z-[25]) always paints above booking blocks. */}
+          <div className="relative flex-shrink-0 z-0" style={{ width: totalWidth }}>
             <TimelineGrid
               virtualColumns={virtualColumns}
               totalWidth={totalWidth}
@@ -401,6 +410,9 @@ export function TimelineScheduler() {
                 closeSheet()
                 setActiveJourneyId(null)
                 setCheckOutDialog({ open: true, stayId })
+              }}
+              onNoShow={(stayId) => {
+                setNoShowDialog({ stayId })
               }}
               lockedStays={lockedStays}
               onToggleLock={toggleLock}
@@ -456,6 +468,28 @@ export function TimelineScheduler() {
       )}
 
       {/* ─── Dialogs ─────────────────────────────────────────── */}
+      {noShowDialog && noShowTarget && (
+        <NoShowConfirmModal
+          guestName={noShowTarget.guestName}
+          roomNumber={noShowTarget.roomNumber ?? (() => {
+            const row = flatRows.find(r => r.id === noShowTarget.roomId && r.type === 'room')
+            return row?.room?.number
+          })()}
+          checkIn={noShowTarget.checkIn}
+          checkOut={noShowTarget.checkOut}
+          source={noShowTarget.source}
+          otaName={noShowTarget.otaName}
+          isPending={markNoShowMut.isPending}
+          onClose={() => setNoShowDialog(null)}
+          onConfirm={() => {
+            markNoShowMut.mutate(
+              { stayId: noShowDialog.stayId },
+              { onSettled: () => setNoShowDialog(null) },
+            )
+          }}
+        />
+      )}
+
       <BookingDetailSheet
         stay={(() => {
           const raw = stays.find(s => s.id === sheetStayId) ?? journeyBlocks.find(s => s.id === sheetStayId) ?? null
@@ -477,6 +511,12 @@ export function TimelineScheduler() {
         onMoveRoom={(stayId) => {
           console.log('TODO: mover habitación', stayId)
           closeSheet()
+        }}
+        onNoShow={(stayId, opts) => {
+          markNoShowMut.mutate({ stayId, ...opts })
+        }}
+        onRevertNoShow={(stayId) => {
+          revertNoShowMut.mutate(stayId)
         }}
       />
 

@@ -514,6 +514,13 @@ model PropertySettings {
   defaultCheckoutTime String    @default("11:00")
   timezone            String    @default("America/Cancun")
   pmsMode             String    @default("STANDALONE")
+  // Night audit: hora local a partir de la cual se procesan no-shows (0-23).
+  // El scheduler corre cada 30 min y verifica hora local por propiedad.
+  // Default 2 = 02:00 AM local — permite late arrivals por vuelos retrasados.
+  noShowCutoffHour    Int       @default(2) @map("no_show_cutoff_hour")
+  // Fecha (solo date, no datetime) del último procesamiento de no-shows.
+  // El scheduler la compara con la fecha local actual para evitar doble ejecución.
+  noShowProcessedDate DateTime? @db.Date @map("no_show_processed_date")
   deletedAt           DateTime? @map("deleted_at")
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
@@ -623,6 +630,19 @@ model GuestStay {
   notes             String?
   checkedInById     String        @map("checked_in_by_id")
   checkedOutById    String?       @map("checked_out_by_id")
+  // ── No-show fields ───────────────────────────────────────────────────────
+  // noShowAt != null indica que el huésped no se presentó y fue marcado.
+  // La disponibilidad de la habitación excluye stays con noShowAt != null
+  // (ver checkAvailability). El cargo se registra en noShowFeeAmount y su
+  // estado en noShowChargeStatus (PENDING → CHARGED | FAILED | WAIVED).
+  noShowAt           DateTime?           @map("no_show_at")
+  noShowById         String?             @map("no_show_by_id")
+  noShowReason       String?             @map("no_show_reason")
+  noShowFeeAmount    Decimal?            @map("no_show_fee_amount") @db.Decimal(10, 2)
+  noShowFeeCurrency  String?             @map("no_show_fee_currency")
+  noShowChargeStatus NoShowChargeStatus? @map("no_show_charge_status")
+  noShowRevertedAt   DateTime?           @map("no_show_reverted_at")
+  noShowRevertedById String?             @map("no_show_reverted_by_id")
   deletedAt         DateTime?     @map("deleted_at")
   createdAt         DateTime      @default(now()) @map("created_at")
   updatedAt         DateTime      @updatedAt @map("updated_at")
@@ -636,6 +656,7 @@ model GuestStay {
   @@index([organizationId, propertyId])
   @@index([roomId])
   @@index([paymentStatus])
+  @@index([noShowAt])
   @@map("guest_stays")
 }
 
@@ -751,6 +772,7 @@ enum StayJourneyStatus {
   ACTIVE
   CHECKED_OUT
   CANCELLED
+  NO_SHOW
 
   @@map("stay_journey_status")
 }
@@ -789,8 +811,24 @@ enum JourneyEventType {
   EXTENSION_APPROVED
   CHECKED_OUT
   CANCELLED
+  NO_SHOW_MARKED
+  NO_SHOW_REVERTED
 
   @@map("journey_event_type")
+}
+
+// ── No-Show charge lifecycle ──────────────────────────────────────────────────
+// NOT_APPLICABLE → policy = NONE (tarifa gratuita)
+// PENDING        → registrado, esperando procesamiento de pago
+// CHARGED        → cobro procesado exitosamente
+// FAILED         → tarjeta rechazada (requiere acción manual)
+// WAIVED         → exonerado por supervisor (fee perdonado)
+enum NoShowChargeStatus {
+  NOT_APPLICABLE
+  PENDING
+  CHARGED
+  FAILED
+  WAIVED
 }
 
 model StayJourney {

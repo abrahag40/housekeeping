@@ -59,8 +59,8 @@ export function UserMenu() {
           className="rounded-full shrink-0 h-9 w-9 text-slate-600 hover:bg-slate-100"
           aria-label="Abrir menú de usuario"
         >
-          <span className="inline-flex items-center justify-center rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold h-7 w-7">
-            {initials}
+          <span className="inline-flex items-center justify-center rounded-full bg-slate-100 text-slate-600 h-7 w-7">
+            <User className="h-4 w-4" />
           </span>
         </Button>
       </DropdownMenuTrigger>

@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Spring easing curves ─────────────────────────────────────────────────── */
+/* Used via [animation-timing-function:var(--ease-spring)] to avoid the      */
+/* Tailwind JIT comma-inside-cubic-bezier scanner bug with variant prefixes.  */
+:root {
+  --ease-spring:    cubic-bezier(0.22, 1, 0.36, 1);   /* expo-out: SwiftUI panel feel */
+  --ease-sharp-out: cubic-bezier(0.55, 0, 1, 0.45);  /* expo-in: exit rápido y limpio */
+}
+
+/* ── Timeline tooltip entrance animations ─────────────────────────────────── */
+/* Aparecen solo al hacer mount (visible=true). GPU composited: solo          */
+/* opacity + translateY. 160ms es el límite superior para tooltips per        */
+/* NNGroup "Response Times: The 3 Important Limits" (< 200ms = instantaneous).*/
+@keyframes tooltip-in-top {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+@keyframes tooltip-in-bottom {
+  from { opacity: 0; transform: translateY(-5px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+.tooltip-top    { animation: tooltip-in-top    160ms var(--ease-spring); }
+.tooltip-bottom { animation: tooltip-in-bottom 160ms var(--ease-spring); }
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-top, .tooltip-bottom { animation-duration: 0ms; }
+}
+
 /* ── shadcn/ui CSS variables (neutral / radix-nova) ───────────────────────── */
 @layer base {
   /* Channel-only values so Tailwind's <alpha-value> interpolation works:

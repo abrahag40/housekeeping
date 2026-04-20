@@ -42,9 +42,9 @@ export function TodayColumnHighlight({ days, dayWidth, flatRows, poolStart }: To
         left: todayLeft,
         width: dayWidth,
         height: totalHeight,
-        backgroundColor: 'rgba(16, 185, 129, 0.04)',
-        borderLeft: '1px solid rgba(16, 185, 129, 0.08)',
-        borderRight: '1px solid rgba(16, 185, 129, 0.08)',
+        backgroundColor: 'rgba(16, 185, 129, 0.06)',
+        borderLeft: '1px solid rgba(16, 185, 129, 0.25)',
+        borderRight: '1px solid rgba(16, 185, 129, 0.25)',
         zIndex: 1,
       }}
     />
