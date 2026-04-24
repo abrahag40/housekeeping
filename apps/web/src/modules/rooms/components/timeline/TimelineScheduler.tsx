@@ -26,6 +26,7 @@ import { CheckOutDialog } from '../dialogs/CheckOutDialog'
 import { ExtendConfirmDialog } from '../dialogs/ExtendConfirmDialog'
 import { MoveRoomDialog } from '../dialogs/MoveRoomDialog'
 import { MoveExtensionConfirmDialog } from '../dialogs/MoveExtensionConfirmDialog'
+import { MoveReservationConfirmDialog } from '../dialogs/MoveReservationConfirmDialog'
 import { NoShowConfirmModal } from './NoShowConfirmModal'
 import type {
   FlatRow,
@@ -200,7 +201,22 @@ export function TimelineScheduler() {
   const markNoShowMut   = useMarkNoShow(PROPERTY_ID)
   const revertNoShowMut = useRevertNoShow(PROPERTY_ID)
 
-  const { journeyBlocks } = useStayJourneys(PROPERTY_ID, dataWindow.from, dataWindow.to)
+  const { journeyBlocks: rawJourneyBlocks } = useStayJourneys(PROPERTY_ID, dataWindow.from, dataWindow.to)
+
+  // Propagate `noShowAt` from parent GuestStay to each journey segment block.
+  // The journeys endpoint doesn't return this field, but drag/drop conflict
+  // detection needs it: a no-show releases inventory (CLAUDE.md §17) — segments
+  // belonging to a no-show stay must NOT count as room occupancy.
+  const journeyBlocks = useMemo(() => {
+    const noShowMap = new Map<string, Date>()
+    for (const s of stays) if (s.noShowAt) noShowMap.set(s.id, s.noShowAt)
+    if (noShowMap.size === 0) return rawJourneyBlocks
+    return rawJourneyBlocks.map((b) =>
+      b.guestStayId && noShowMap.has(b.guestStayId)
+        ? { ...b, noShowAt: noShowMap.get(b.guestStayId) }
+        : b,
+    )
+  }, [rawJourneyBlocks, stays])
 
   // SSE: real-time updates when room status changes
   useRoomSSE(PROPERTY_ID)
@@ -223,13 +239,24 @@ export function TimelineScheduler() {
   )
 
   const handleDropSuccess = useCallback((result: DropResult) => {
-    // Check if the dropped block is an extension segment — those open a lightweight
-    // confirm dialog instead of MoveRoomDialog (no effectiveDate needed).
+    // ── Journey segment drag ─────────────────────────────────────────────────
+    // ORIGINAL (unlocked) + EXTENSION_SAME/NEW_ROOM are movable.
+    // ROOM_MOVE / SPLIT are immutable history and are never draggable.
     const draggedJourneyBlock = journeyBlocks.find(b => b.id === result.stayId)
-    if (
+    const isMovableJourneySegment =
+      draggedJourneyBlock?.segmentReason === 'ORIGINAL' ||
       draggedJourneyBlock?.segmentReason === 'EXTENSION_SAME_ROOM' ||
       draggedJourneyBlock?.segmentReason === 'EXTENSION_NEW_ROOM'
-    ) {
+
+    if (draggedJourneyBlock && isMovableJourneySegment) {
+      // IN_HOUSE journey segment: moving the entire segment would shift past nights
+      // to the new room — incorrect for BI/marketing history (CLAUDE.md §22/§29).
+      // Redirect to the split dialog, pre-selecting the target room for part 2.
+      const segStatus = getStayStatus(draggedJourneyBlock.checkIn, draggedJourneyBlock.checkOut, draggedJourneyBlock.actualCheckout)
+      if (segStatus === 'IN_HOUSE') {
+        setMoveRoomDialog({ stayId: draggedJourneyBlock.id, preselectedNewRoomId: result.newRoomId })
+        return
+      }
       const newRoomRow = flatRows.find(r => r.id === result.newRoomId && r.type === 'room')
       setMoveExtensionConfirm({
         segmentId: draggedJourneyBlock.segmentId!,
@@ -242,8 +269,38 @@ export function TimelineScheduler() {
       })
       return
     }
-    moveRoomMut.mutate({ stayId: result.stayId, newRoomId: result.newRoomId })
-  }, [moveRoomMut, journeyBlocks, flatRows])
+
+    // ── Plain GuestStay drag ─────────────────────────────────────────────────
+    const draggedStay = stays.find(s => s.id === result.stayId) ?? null
+    if (!draggedStay) return
+
+    // IN_HOUSE plain stay: block full-block move for the same reason as above.
+    // Open MoveRoomDialog in split mode with the target room pre-selected.
+    const stayStatus = getStayStatus(draggedStay.checkIn, draggedStay.checkOut, draggedStay.actualCheckout)
+    if (stayStatus === 'IN_HOUSE') {
+      setMoveRoomDialog({ stayId: draggedStay.id, preselectedNewRoomId: result.newRoomId })
+      return
+    }
+
+    // ARRIVING / DEPARTING — simple full-block move with confirmation dialog
+    // (non-negotiable — see CLAUDE.md §32).
+    const newRoomRow = flatRows.find(r => r.id === result.newRoomId && r.type === 'room')
+    const fromRoomRow = flatRows.find(r => r.id === draggedStay.roomId && r.type === 'room')
+    setMoveReservationConfirm({
+      stayId: draggedStay.id,
+      guestName: draggedStay.guestName,
+      fromRoomId: draggedStay.roomId,
+      fromRoomNumber: fromRoomRow?.room?.number,
+      newRoomId: result.newRoomId,
+      newRoomNumber: newRoomRow?.room?.number ?? result.newRoomId.slice(0, 8),
+      nights: Math.max(1, differenceInCalendarDays(draggedStay.checkOut, draggedStay.checkIn)),
+      checkIn: draggedStay.checkIn,
+      checkOut: draggedStay.checkOut,
+    })
+  }, [journeyBlocks, flatRows, stays])
+
+  // ─── No-show filter toggle (§34 — default visible) ──────────────────────────
+  const [hideNoShows, setHideNoShows] = useState(false)
 
   // ─── Journey highlight (lifted from BookingsLayer for cross-component sync) ──
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null)
@@ -278,10 +335,27 @@ export function TimelineScheduler() {
   } | null>(null)
 
   // ─── Move room dialog ──────────────────────────────────────────
-  const [moveRoomDialog, setMoveRoomDialog] = useState<{ stayId: string } | null>(null)
+  const [moveRoomDialog, setMoveRoomDialog] = useState<{
+    stayId: string
+    /** Pre-selects part 2 room when opened via drag-and-drop to a specific target */
+    preselectedNewRoomId?: string
+  } | null>(null)
   const moveRoomTarget = moveRoomDialog
     ? (stays.find(s => s.id === moveRoomDialog.stayId) ?? journeyBlocks.find(s => s.id === moveRoomDialog.stayId) ?? null)
     : null
+
+  // ─── Move reservation confirm (drag plain stay block to another row) ──
+  const [moveReservationConfirm, setMoveReservationConfirm] = useState<{
+    stayId: string
+    guestName: string
+    fromRoomId: string
+    fromRoomNumber?: string
+    newRoomId: string
+    newRoomNumber: string
+    nights: number
+    checkIn: Date
+    checkOut: Date
+  } | null>(null)
 
   // ─── Move extension confirm (drag +ext block to another row) ──
   const [moveExtensionConfirm, setMoveExtensionConfirm] = useState<{
@@ -321,6 +395,7 @@ export function TimelineScheduler() {
     const set = new Set<string>()
     for (const block of allBlocksForDragCheck) {
       if (block.actualCheckout) continue // departed — not an active occupancy
+      if (block.noShowAt) continue       // no-show releases inventory (CLAUDE.md §17)
       const checkIn = block.checkIn.getTime()
       const checkOut = block.checkOut.getTime()
       const MS_DAY = 86400000
@@ -347,6 +422,7 @@ export function TimelineScheduler() {
     flatRows,
     stays: allBlocksForDragCheck,
     onDropSuccess: handleDropSuccess,
+    onDropInvalid: (reason) => toast.error(reason),
   })
 
   const handleDragStartWithPosition = useCallback((stayId: string, clientX: number, clientY: number) => {
@@ -489,6 +565,8 @@ export function TimelineScheduler() {
       <TimelineSubBar
         onNavigate={handleNavigate}
         onGoToToday={handleGoToToday}
+        hideNoShows={hideNoShows}
+        onToggleHideNoShows={() => setHideNoShows((v) => !v)}
       />
 
       <div className="flex flex-col flex-1 overflow-hidden relative">
@@ -630,7 +708,7 @@ export function TimelineScheduler() {
             })()}
 
             <BookingsLayer
-              stays={staysWithoutJourneys}
+              stays={hideNoShows ? staysWithoutJourneys.filter((s) => !s.noShowAt) : staysWithoutJourneys}
               flatRows={flatRows}
               days={days}
               dayWidth={dayWidth}
@@ -747,6 +825,7 @@ export function TimelineScheduler() {
         }}
         onMoveRoom={(stayId) => {
           setMoveRoomDialog({ stayId })
+          setActiveJourneyId(null)
           closeSheet()
         }}
         onNoShow={(stayId, opts) => {
@@ -842,6 +921,8 @@ export function TimelineScheduler() {
             stays={allBlocksForDragCheck}
             isInHouse={isInHouse}
             isPending={isBusy}
+            initialNewRoomId={moveRoomDialog.preselectedNewRoomId}
+            initialSplitMode={isInHouse && !!moveRoomDialog.preselectedNewRoomId}
             onClose={() => setMoveRoomDialog(null)}
             onConfirm={(newRoomId, effectiveDate) => {
               if (isInHouse && moveRoomTarget.journeyId) {
@@ -876,6 +957,24 @@ export function TimelineScheduler() {
           />
         )
       })()}
+      {moveReservationConfirm && (
+        <MoveReservationConfirmDialog
+          guestName={moveReservationConfirm.guestName}
+          fromRoomNumber={moveReservationConfirm.fromRoomNumber}
+          toRoomNumber={moveReservationConfirm.newRoomNumber}
+          nights={moveReservationConfirm.nights}
+          checkIn={moveReservationConfirm.checkIn}
+          checkOut={moveReservationConfirm.checkOut}
+          isPending={moveRoomMut.isPending}
+          onClose={() => setMoveReservationConfirm(null)}
+          onConfirm={() => {
+            moveRoomMut.mutate(
+              { stayId: moveReservationConfirm.stayId, newRoomId: moveReservationConfirm.newRoomId },
+              { onSettled: () => setMoveReservationConfirm(null) },
+            )
+          }}
+        />
+      )}
       {moveExtensionConfirm && (
         <MoveExtensionConfirmDialog
           newRoomNumber={moveExtensionConfirm.newRoomNumber}

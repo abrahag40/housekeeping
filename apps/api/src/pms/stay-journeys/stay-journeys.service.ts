@@ -90,6 +90,7 @@ export class StayJourneyService {
       activeSegment.checkOut,
       newCheckOut,
       activeSegment.id,
+      dto.journeyId,
     )
 
     const newSegment = await this.prisma.$transaction(async (tx) => {
@@ -256,7 +257,13 @@ export class StayJourneyService {
       throw new BadRequestException('newCheckOut must be after the current segment checkOut')
     }
 
-    await this.assertRoomAvailable(dto.newRoomId, activeSegment.checkOut, newCheckOut)
+    await this.assertRoomAvailable(
+      dto.newRoomId,
+      activeSegment.checkOut,
+      newCheckOut,
+      undefined,
+      dto.journeyId,
+    )
 
     const newSegment = await this.prisma.$transaction(async (tx) => {
       const segment = await tx.staySegment.create({
@@ -340,7 +347,13 @@ export class StayJourneyService {
       throw new BadRequestException('newRoomId must be different from the current room')
     }
 
-    await this.assertRoomAvailable(dto.newRoomId, effectiveDate, activeSegment.checkOut)
+    await this.assertRoomAvailable(
+      dto.newRoomId,
+      effectiveDate,
+      activeSegment.checkOut,
+      undefined,
+      dto.journeyId,
+    )
 
     const originalCheckOut = activeSegment.checkOut
 
@@ -419,6 +432,24 @@ export class StayJourneyService {
       journey.propertyId,
       activeSegment.roomId,
     )
+
+    // Channel manager sync — fire-and-forget (CLAUDE.md §31).
+    // Release old room from effectiveDate onward; reserve new room for the same window.
+    const mmTraceId = `room-move-${dto.journeyId}-${Date.now()}`
+    void this.availability.notifyRelease({
+      roomId: activeSegment.roomId,
+      from: effectiveDate,
+      to: originalCheckOut,
+      reason: 'ROOM_MOVE',
+      traceId: mmTraceId,
+    })
+    void this.availability.notifyReservation({
+      roomId: dto.newRoomId,
+      from: effectiveDate,
+      to: originalCheckOut,
+      reason: 'ROOM_MOVE',
+      traceId: mmTraceId,
+    })
 
     return newSegment
   }
@@ -657,11 +688,17 @@ export class StayJourneyService {
   }
 
   /**
-   * moveExtensionRoom — Reasigna un segmento de extensión a una habitación diferente.
+   * moveExtensionRoom — Reasigna un segmento del journey a una habitación diferente.
    *
-   * Solo aplica a segmentos EXTENSION_SAME_ROOM o EXTENSION_NEW_ROOM.
-   * Si el nuevo cuarto coincide con el cuarto del segmento ORIGINAL del journey,
-   * el reason se ajusta a EXTENSION_SAME_ROOM; de lo contrario EXTENSION_NEW_ROOM.
+   * Acepta segmentos **no bloqueados** con reason ORIGINAL, EXTENSION_SAME_ROOM o
+   * EXTENSION_NEW_ROOM. ROOM_MOVE y SPLIT son inmutables (representan historia
+   * planeada — mover su roomId rompería el audit trail del journey).
+   *
+   * Para extensiones, el `reason` se recalcula según si el nuevo cuarto coincide
+   * con el ORIGINAL del journey (EXTENSION_SAME_ROOM vs EXTENSION_NEW_ROOM).
+   * Para ORIGINAL, el reason se mantiene y, si hay `guestStayId` asociado,
+   * también se sincroniza `GuestStay.roomId` para que vistas legacy (planning,
+   * housekeeping) queden consistentes.
    */
   async moveExtensionRoom(segmentId: string, newRoomId: string) {
     const segment = await this.prisma.staySegment.findUniqueOrThrow({
@@ -678,25 +715,75 @@ export class StayJourneyService {
       },
     })
 
-    if (
-      segment.reason !== 'EXTENSION_SAME_ROOM' &&
-      segment.reason !== 'EXTENSION_NEW_ROOM'
-    ) {
+    const movableReasons: Array<typeof segment.reason> = [
+      'ORIGINAL',
+      'EXTENSION_SAME_ROOM',
+      'EXTENSION_NEW_ROOM',
+    ]
+    if (!movableReasons.includes(segment.reason)) {
       throw new BadRequestException(
-        'Solo se pueden reubicar segmentos de extensión',
+        'Solo se pueden reubicar segmentos ORIGINAL o de extensión (ROOM_MOVE y SPLIT son inmutables)',
+      )
+    }
+    if (segment.locked) {
+      throw new BadRequestException(
+        'El segmento está bloqueado y no puede reubicarse',
       )
     }
 
-    await this.assertRoomAvailable(newRoomId, segment.checkIn, segment.checkOut, segmentId)
+    await this.assertRoomAvailable(
+      newRoomId,
+      segment.checkIn,
+      segment.checkOut,
+      segmentId,
+      segment.journeyId,
+    )
 
     const originalRoomId = segment.journey.segments[0]?.roomId
     const newReason =
-      newRoomId === originalRoomId ? 'EXTENSION_SAME_ROOM' : 'EXTENSION_NEW_ROOM'
+      segment.reason === 'ORIGINAL'
+        ? 'ORIGINAL'
+        : newRoomId === originalRoomId
+          ? 'EXTENSION_SAME_ROOM'
+          : 'EXTENSION_NEW_ROOM'
 
-    return this.prisma.staySegment.update({
-      where: { id: segmentId },
-      data: { roomId: newRoomId, reason: newReason },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const seg = await tx.staySegment.update({
+        where: { id: segmentId },
+        data: { roomId: newRoomId, reason: newReason },
+      })
+
+      // For ORIGINAL segments linked to a GuestStay, keep GuestStay.roomId in
+      // sync so planning/housekeeping queries resolve the right room. Skipped
+      // for extensions (they live only in the journey layer).
+      if (segment.reason === 'ORIGINAL' && segment.guestStayId) {
+        await tx.guestStay.update({
+          where: { id: segment.guestStayId },
+          data: { roomId: newRoomId },
+        })
+      }
+
+      return seg
     })
+
+    // Channel manager sync — fire-and-forget (CLAUDE.md §31).
+    const erTraceId = `ext-move-${segmentId}-${Date.now()}`
+    void this.availability.notifyRelease({
+      roomId: segment.roomId,
+      from: segment.checkIn,
+      to: segment.checkOut,
+      reason: 'ROOM_MOVE',
+      traceId: erTraceId,
+    })
+    void this.availability.notifyReservation({
+      roomId: newRoomId,
+      from: segment.checkIn,
+      to: segment.checkOut,
+      reason: 'ROOM_MOVE',
+      traceId: erTraceId,
+    })
+
+    return updated
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
@@ -751,14 +838,27 @@ export class StayJourneyService {
     from: Date,
     to: Date,
     excludeSegmentId?: string,
+    excludeJourneyId?: string,
   ) {
+    // Segments belonging to the SAME journey represent the same guest being
+    // rearranged across rooms/dates — they must not block each other as inventory
+    // conflicts. This also neutralises fractional-hour overlaps caused by the
+    // inconsistency between real hotel times (15:00 check-in, 12:00 check-out on
+    // legacy ORIGINAL segments) and `startOfDay` normalization applied to new
+    // extension segments. See CLAUDE.md §29 (sprint8-migrate) — AvailabilityService
+    // will centralise this check for all inventory queries.
     const conflict = await this.prisma.staySegment.findFirst({
       where: {
         roomId,
         status: { in: ['ACTIVE', 'PENDING'] },
         ...(excludeSegmentId && { id: { not: excludeSegmentId } }),
+        ...(excludeJourneyId && { journeyId: { not: excludeJourneyId } }),
         checkIn: { lt: to },
         checkOut: { gt: from },
+        // Exclude segments belonging to no-show stays — noShowAt releases inventory
+        // immediately (CLAUDE.md §17). Their segments remain ACTIVE in DB but should
+        // not block new reservations for the same period.
+        journey: { guestStay: { noShowAt: null } },
       },
     })
     if (conflict) {

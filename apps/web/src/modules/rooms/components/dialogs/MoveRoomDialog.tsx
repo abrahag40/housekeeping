@@ -1,16 +1,132 @@
 // TODO(sprint8-pricing): cuando Sprint 8 esté activo, mostrar también ratePlanId y
 // commissionRate de la habitación destino para OTAs. Ver CLAUDE.md §Sprint 8.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { startOfDay, format, addDays, differenceInDays, parseISO } from 'date-fns'
+import {
+  startOfDay, format, addDays, addMonths, differenceInDays, parseISO,
+  startOfMonth, startOfWeek, endOfMonth, endOfWeek, eachDayOfInterval,
+  isBefore, isAfter, isSameDay, isSameMonth,
+} from 'date-fns'
 import { es } from 'date-fns/locale'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   ArrowRightLeft, Check, X, Calendar, TrendingUp, TrendingDown,
   Split, Plus, Trash2, AlertTriangle, Search, ChevronDown, ChevronUp, Sparkles,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react'
+import { Popover } from 'radix-ui'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { GuestStayBlock, FlatRow, RoomTypeGroup } from '../../types/timeline.types'
+
+// ── Minimal custom date picker ────────────────────────────────────────────────
+// Replaces <input type="date"> to: (a) match the "Desde" display format
+// (d MMM yyyy, Spanish), and (b) avoid the browser's native highlight box on
+// today's date, which confuses users when today is disabled by the min constraint.
+type DatePickerInputProps = {
+  value: Date
+  onChange: (d: Date) => void
+  min?: Date
+  max?: Date
+}
+function DatePickerInput({ value, onChange, min, max }: DatePickerInputProps) {
+  const [open, setOpen] = useState(false)
+  const [viewMonth, setViewMonth] = useState(() => startOfMonth(value))
+
+  const gridDays = useMemo(() => {
+    const start = startOfWeek(startOfMonth(viewMonth), { weekStartsOn: 1 })
+    const end   = endOfWeek(endOfMonth(viewMonth),     { weekStartsOn: 1 })
+    return eachDayOfInterval({ start, end })
+  }, [viewMonth])
+
+  function pick(day: Date) {
+    const d = startOfDay(day)
+    if (min && isBefore(d, startOfDay(min))) return
+    if (max && isAfter(d, startOfDay(max))) return
+    onChange(d)
+    setOpen(false)
+  }
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className="text-xs font-semibold px-2 py-1.5 rounded border border-slate-200 text-slate-700 w-full text-left flex items-center gap-1.5 hover:border-emerald-400 focus:outline-none focus:border-emerald-400 transition-colors"
+        >
+          <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
+          {format(value, 'd MMM yyyy', { locale: es })}
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          className="z-[9999] bg-white rounded-xl shadow-xl border border-slate-100 p-3 w-[232px]"
+          sideOffset={4}
+          align="start"
+          onOpenAutoFocus={(e: Event) => e.preventDefault()}
+        >
+          {/* Month navigation */}
+          <div className="flex items-center justify-between mb-2">
+            <button
+              type="button"
+              onClick={() => setViewMonth(m => addMonths(m, -1))}
+              className="p-1 rounded hover:bg-slate-100 transition-colors"
+            >
+              <ChevronLeft className="h-3.5 w-3.5 text-slate-500" />
+            </button>
+            <span className="text-[11px] font-semibold text-slate-700 capitalize">
+              {format(viewMonth, 'MMMM yyyy', { locale: es })}
+            </span>
+            <button
+              type="button"
+              onClick={() => setViewMonth(m => addMonths(m, 1))}
+              className="p-1 rounded hover:bg-slate-100 transition-colors"
+            >
+              <ChevronRight className="h-3.5 w-3.5 text-slate-500" />
+            </button>
+          </div>
+
+          {/* Weekday headers */}
+          <div className="grid grid-cols-7 mb-1">
+            {['Lu','Ma','Mi','Ju','Vi','Sá','Do'].map(d => (
+              <span key={d} className="text-center text-[9px] font-semibold text-slate-400 py-0.5">{d}</span>
+            ))}
+          </div>
+
+          {/* Day grid */}
+          <div className="grid grid-cols-7 gap-y-0.5">
+            {gridDays.map((day) => {
+              const isSelected  = isSameDay(day, value)
+              const isThisMonth = isSameMonth(day, viewMonth)
+              const disabled    =
+                (!!min && isBefore(startOfDay(day), startOfDay(min))) ||
+                (!!max && isAfter(startOfDay(day), startOfDay(max)))
+              return (
+                <button
+                  key={day.toISOString()}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => pick(day)}
+                  className={cn(
+                    'h-7 w-full rounded text-[11px] font-medium transition-colors',
+                    isSelected
+                      ? 'bg-emerald-500 text-white'
+                      : disabled
+                        ? 'text-slate-300 cursor-default'
+                        : isThisMonth
+                          ? 'text-slate-700 hover:bg-emerald-50 hover:text-emerald-700'
+                          : 'text-slate-300 hover:bg-slate-50',
+                  )}
+                >
+                  {format(day, 'd')}
+                </button>
+              )
+            })}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  )
+}
 
 interface MoveRoomDialogProps {
   stay: GuestStayBlock
@@ -24,6 +140,10 @@ interface MoveRoomDialogProps {
   onConfirm: (newRoomId: string, effectiveDate?: Date) => void
   /** Called when the user confirms a multi-room split (≥2 parts) */
   onSplit: (parts: Array<{ roomId: string; checkIn: Date; checkOut: Date }>) => void
+  /** Pre-selects the second split part's room (used when opening via drag to a target room) */
+  initialNewRoomId?: string
+  /** Opens the dialog directly in split mode (used when the guest is IN_HOUSE and drag was attempted) */
+  initialSplitMode?: boolean
 }
 
 type SplitPart = { roomId: string | null; checkIn: Date; checkOut: Date }
@@ -48,6 +168,8 @@ export function MoveRoomDialog({
   onClose,
   onConfirm,
   onSplit,
+  initialNewRoomId,
+  initialSplitMode = false,
 }: MoveRoomDialogProps) {
   // today: estable durante la vida del dialog. Sin useMemo se creaba un Date
   // nuevo cada render, invalidando `validation` useMemo aun sin cambios.
@@ -96,7 +218,7 @@ export function MoveRoomDialog({
   const [effectiveDateStr, setEffectiveDateStr] = useState(format(today, 'yyyy-MM-dd'))
 
   // ── Split state (modo N-parts) ──────────────────────────────────────────────
-  const [splitMode, setSplitMode] = useState(false)
+  const [splitMode, setSplitMode] = useState(initialSplitMode)
   const [splitParts, setSplitParts] = useState<SplitPart[]>(() => {
     // Semilla: 2 partes dividiendo el rango por la mitad.
     // Para IN_HOUSE, el corte inicial debe ser ≥ mañana (primer tramo debe incluir hoy).
@@ -106,7 +228,8 @@ export function MoveRoomDialog({
     const adjustedMid = isInHouse && mid <= today ? addDays(today, 1) : mid
     return [
       { roomId: stay.roomId, checkIn, checkOut: adjustedMid },
-      { roomId: null, checkIn: adjustedMid, checkOut },
+      // Pre-fill the new room when opening via drag-and-drop to a specific target room
+      { roomId: initialNewRoomId ?? null, checkIn: adjustedMid, checkOut },
     ]
   })
 
@@ -448,13 +571,11 @@ export function MoveRoomDialog({
                           {format(part.checkOut, 'd MMM yyyy', { locale: es })}
                         </div>
                       ) : (
-                        <input
-                          type="date"
-                          value={format(part.checkOut, 'yyyy-MM-dd')}
-                          min={minCheckOut}
-                          max={maxCheckOut}
-                          onChange={(e) => setPart(i, { checkOut: startOfDay(parseISO(e.target.value)) })}
-                          className="text-xs font-semibold px-2 py-1.5 rounded border border-slate-200 text-slate-700 w-full outline-none focus:border-emerald-400"
+                        <DatePickerInput
+                          value={part.checkOut}
+                          onChange={(d) => setPart(i, { checkOut: d })}
+                          min={parseISO(minCheckOut)}
+                          max={parseISO(maxCheckOut)}
                         />
                       )}
                     </div>

@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom'
-import { format } from 'date-fns'
+import { format, differenceInHours } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Calendar, Moon, Users, UserX } from 'lucide-react'
+import { Calendar, Moon, Users, UserX, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PaymentStatusBadge } from '../shared'
 import { STAY_STATUS_COLORS, OTA_ACCENT_COLORS, SOURCE_COLORS } from '../../utils/timeline.constants'
@@ -21,6 +21,7 @@ interface TooltipPortalProps {
 export function TooltipPortal({ stay, position, visible, registerTooltipRef, onNoShow, isPotentialNoShow }: TooltipPortalProps) {
   if (!visible) return null
 
+  const isConfirmedNoShow = !!stay.noShowAt
   const stayStatus = getStayStatus(stay.checkIn, stay.checkOut, stay.actualCheckout)
   const colors = STAY_STATUS_COLORS[stayStatus as StayStatusKey]
   const sourceColors = SOURCE_COLORS[stay.source as SourceKey] ?? SOURCE_COLORS.other
@@ -84,6 +85,14 @@ export function TooltipPortal({ stay, position, visible, registerTooltipRef, onN
                   <UserX className="h-3 w-3 text-orange-500 shrink-0" />
                   <span className="text-[10px] font-semibold text-orange-700">
                     No se presentó — posible no-show
+                  </span>
+                </div>
+              )}
+              {isConfirmedNoShow && (
+                <div className="flex items-center gap-1 mt-1">
+                  <UserX className="h-3 w-3 text-red-500 shrink-0" />
+                  <span className="text-[10px] font-semibold text-red-700">
+                    No-show confirmado · {format(stay.noShowAt!, 'd MMM', { locale: es })}
                   </span>
                 </div>
               )}
@@ -166,6 +175,28 @@ export function TooltipPortal({ stay, position, visible, registerTooltipRef, onN
             </div>
           )}
         </div>
+
+        {/* Confirmed no-show context — explains the diagonal stripes and NS badge */}
+        {isConfirmedNoShow && (
+          <div className="px-3.5 pb-2.5">
+            <div className="rounded-lg bg-red-50 border border-red-200 p-2.5 space-y-1.5">
+              <p className="text-[10px] font-bold text-red-800 flex items-center gap-1">
+                <UserX className="h-3 w-3 shrink-0" />
+                El huésped no se presentó
+              </p>
+              <p className="text-[10px] text-red-600 leading-snug">
+                La habitación fue liberada y está disponible para nueva venta.
+                Los bloques con rayas rojas son no-shows.
+              </p>
+              {differenceInHours(new Date(), stay.noShowAt!) < 48 && (
+                <p className="text-[10px] text-red-500 font-medium flex items-center gap-1">
+                  <Clock className="h-3 w-3 shrink-0" />
+                  Reversión posible — ventana de 48 h activa
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* No-show quick action */}
         {isPotentialNoShow && onNoShow && (

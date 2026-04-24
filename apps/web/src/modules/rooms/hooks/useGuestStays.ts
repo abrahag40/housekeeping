@@ -42,7 +42,11 @@ function adaptStay(raw: Record<string, unknown>): GuestStayBlock {
     notes:            raw.notes as string | undefined,
     isLocked:         false,
     actualCheckout:   raw.actualCheckout ? new Date(raw.actualCheckout as string) : undefined,
-    noShowAt:         raw.noShowAt ? new Date(raw.noShowAt as string) : undefined,
+    noShowAt:             raw.noShowAt ? new Date(raw.noShowAt as string) : undefined,
+    noShowFeeAmount:      raw.noShowFeeAmount != null ? Number(raw.noShowFeeAmount) : undefined,
+    noShowFeeCurrency:    raw.noShowFeeCurrency as string | undefined,
+    noShowChargeStatus:   raw.noShowChargeStatus as GuestStayBlock['noShowChargeStatus'],
+    stripePaymentMethodId: raw.stripePaymentMethodId as string | undefined,
   }
 }
 
@@ -293,10 +297,8 @@ export function useSplitMidStay(propertyId: string) {
       actorId: string
     }) =>
       api.post(`/v1/stay-journeys/${journeyId}/room-move`, {
-        journeyId,
         newRoomId,
         effectiveDate: effectiveDate.toISOString(),
-        actorId,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
@@ -352,6 +354,48 @@ export function useSplitReservation(propertyId: string) {
     },
     onError: (err: Error) => {
       toast.error(err.message ?? 'No se pudo dividir la reserva')
+    },
+  })
+}
+
+export function useLogContact(stayId: string) {
+  return useMutation({
+    mutationFn: ({
+      channel,
+      messagePreview,
+    }: {
+      channel: 'WHATSAPP' | 'EMAIL' | 'PHONE'
+      messagePreview?: string
+    }) =>
+      api.post(`/v1/guest-stays/${stayId}/contact-log`, { channel, messagePreview }),
+  })
+}
+
+export function useChargeNoShow(stayId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post(`/v1/payments/guest-stays/${stayId}/charge-noshow`, {}),
+    onSuccess: () => {
+      toast.success('Cargo procesado')
+      qc.invalidateQueries({ queryKey: ['guest-stays'], refetchType: 'active' })
+    },
+    onError: (err: ApiError) => {
+      toast.error(err.message ?? 'No se pudo procesar el cargo')
+    },
+  })
+}
+
+export function useWaiveNoShow(stayId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (reason: string) =>
+      api.post(`/v1/payments/guest-stays/${stayId}/waive-noshow`, { reason }),
+    onSuccess: () => {
+      toast.success('Cargo perdonado')
+      qc.invalidateQueries({ queryKey: ['guest-stays'], refetchType: 'active' })
+    },
+    onError: (err: ApiError) => {
+      toast.error(err.message ?? 'No se pudo perdonar el cargo')
     },
   })
 }

@@ -33,7 +33,11 @@ export interface GuestStayBlock {
   notes?: string
   isLocked?: boolean
   actualCheckout?: Date
-  noShowAt?: Date        // set when the stay is marked as no-show
+  noShowAt?: Date
+  noShowFeeAmount?: number
+  noShowFeeCurrency?: string
+  noShowChargeStatus?: 'NOT_APPLICABLE' | 'PENDING' | 'CHARGED' | 'FAILED' | 'WAIVED'
+  stripePaymentMethodId?: string
   otaName?: string
   otaReservationId?: string
   pmsReservationId?: string

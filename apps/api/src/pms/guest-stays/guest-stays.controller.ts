@@ -9,6 +9,7 @@ import {
   Query,
 } from '@nestjs/common'
 import { IsBoolean, IsOptional, IsString } from 'class-validator'
+import { CreateContactLogDto } from './dto/create-contact-log.dto'
 
 class MarkNoShowDto {
   @IsOptional()
@@ -136,5 +137,19 @@ export class GuestStaysController {
     @CurrentUser() actor: JwtPayload,
   ) {
     return this.service.revertNoShow(id, actor.sub)
+  }
+
+  /**
+   * POST /v1/guest-stays/:id/contact-log
+   * Registra un intento de contacto al huésped para documentación de disputas.
+   * Append-only — no hay endpoint de actualización ni borrado.
+   */
+  @Post(':id/contact-log')
+  logContact(
+    @Param('id') id: string,
+    @Body() dto: CreateContactLogDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.logContact(id, actor.sub, dto.channel, dto.messagePreview)
   }
 }

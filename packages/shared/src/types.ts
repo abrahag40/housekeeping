@@ -333,6 +333,8 @@ export type SseEventType =
   // No-show events
   | 'stay:no_show'
   | 'stay:no_show_reverted'
+  // Pre-arrival warning (potential no-show)
+  | 'arrival:at_risk'
 
 // ─── Offline Sync (Mobile) ────────────────────────────────────────────────────
 

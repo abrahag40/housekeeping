@@ -40,4 +40,22 @@ export class EmailService {
   async sendMaintenanceAlert(to: string, ticketId: string): Promise<void> {
     this.logger.warn(`[STUB] sendMaintenanceAlert → ${to} (ticket ${ticketId})`)
   }
+
+  /**
+   * Alerta de potencial no-show: enviada cuando el huésped no ha llegado
+   * pasada la hora de advertencia configurada en PropertySettings.
+   * Proveedor recomendado: Postmark (API key via POSTMARK_API_KEY env var).
+   * Fail-soft: si la key no está configurada, solo loguea — no lanza excepción.
+   */
+  async sendPotentialNoShowAlert(opts: {
+    to: string
+    guestName: string
+    roomNumber: string
+    propertyName: string
+    checkInDate: Date
+  }): Promise<void> {
+    this.logger.warn(
+      `[STUB] sendPotentialNoShowAlert → ${opts.to} (${opts.guestName}, hab. ${opts.roomNumber}) — Postmark no configurado`,
+    )
+  }
 }

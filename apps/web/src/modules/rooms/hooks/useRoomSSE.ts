@@ -7,6 +7,10 @@ const ROOM_EVENT_TYPES: SseEventType[] = [
   'room:moved',
   'checkin:completed',
   'checkout:confirmed',
+  // No-show and potential no-show events — cause block visuals to update
+  'stay:no_show',
+  'stay:no_show_reverted',
+  'arrival:at_risk',
 ]
 
 /**

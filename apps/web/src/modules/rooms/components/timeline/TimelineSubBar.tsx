@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, EyeOff } from 'lucide-react'
 import { format, addDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
@@ -15,9 +15,16 @@ const VIEW_OPTIONS: { mode: ViewMode; label: string }[] = [
 interface TimelineSubBarProps {
   onNavigate?: (direction: 'prev' | 'next') => void
   onGoToToday?: () => void
+  hideNoShows?: boolean
+  onToggleHideNoShows?: () => void
 }
 
-export function TimelineSubBar({ onNavigate, onGoToToday }: TimelineSubBarProps) {
+export function TimelineSubBar({
+  onNavigate,
+  onGoToToday,
+  hideNoShows = false,
+  onToggleHideNoShows,
+}: TimelineSubBarProps) {
   const { viewStart, viewMode, daysVisible, navigate, goToToday, setViewMode } =
     useTimelineStore()
 
@@ -93,6 +100,25 @@ export function TimelineSubBar({ onNavigate, onGoToToday }: TimelineSubBarProps)
         {rangeLabel}
       </span>
 
+      {/* No-show filter — §34: default visible, toggle to hide */}
+      {onToggleHideNoShows && (
+        <>
+          <Separator orientation="vertical" className="h-5 mx-1 ml-auto" />
+          <button
+            onClick={onToggleHideNoShows}
+            title={hideNoShows ? 'Mostrar no-shows' : 'Ocultar no-shows'}
+            className={cn(
+              'flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+              hideNoShows
+                ? 'bg-slate-200 text-slate-700'
+                : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100',
+            )}
+          >
+            <EyeOff className="h-3.5 w-3.5" />
+            {hideNoShows ? 'No-shows ocultos' : 'Ocultar no-shows'}
+          </button>
+        </>
+      )}
     </div>
   )
 }

@@ -143,9 +143,16 @@ function BookingBlockInner({
   const isPotentialNoShow = stayStatus === 'IN_HOUSE' && !stay.noShowAt
   const colors = STAY_STATUS_COLORS[stayStatus as StayStatusKey]
   const otaAccent = OTA_ACCENT_COLORS[stay.source] ?? OTA_ACCENT_COLORS.other
-  // Journey block flags: EXTENSION segments can be dragged to reassign room;
-  // ROOM_MOVE segments are immutable (represent placed history) → click-only.
+  // Journey block flags: segments whose roomId can be reassigned via drag.
+  // - ORIGINAL, EXTENSION_SAME_ROOM, EXTENSION_NEW_ROOM: draggable when not locked.
+  // - ROOM_MOVE, SPLIT: always click-only (represent placed history; changing
+  //   their room would break the audit trail of the stay journey).
   const isJourneyBlock = !!stay.segmentReason
+  const isMovableSegment =
+    !stay.segmentLocked &&
+    (stay.segmentReason === 'ORIGINAL' ||
+      stay.segmentReason === 'EXTENSION_SAME_ROOM' ||
+      stay.segmentReason === 'EXTENSION_NEW_ROOM')
   const isMovableExtension =
     stay.segmentReason === 'EXTENSION_SAME_ROOM' ||
     stay.segmentReason === 'EXTENSION_NEW_ROOM'
@@ -201,11 +208,30 @@ function BookingBlockInner({
     // Past stays, no-shows, locked journey segments (ORIGINAL with extensions), and
     // ROOM_MOVE segments: click-only. EXTENSION segments are draggable — drop on
     // different row → MoveExtensionConfirmDialog.
-    if (isPast || isConfirmedNoShow || isSegmentLocked || (isJourneyBlock && !isMovableExtension)) {
-      function handleMouseUpReadOnly() {
-        window.removeEventListener('mouseup', handleMouseUpReadOnly)
-        onClick()
+    if (isPast || isConfirmedNoShow || isSegmentLocked || (isJourneyBlock && !isMovableSegment)) {
+      // Read-only blocks still need drag-threshold detection so a "drag then release
+      // outside the block" gesture does NOT trigger onClick (which would open the
+      // side panel). Cursor moved beyond threshold = user intent was not a click.
+      const startX = e.clientX
+      const startY = e.clientY
+      let movedPastThreshold = false
+
+      function handleMouseMoveReadOnly(ev: MouseEvent) {
+        if (movedPastThreshold) return
+        if (
+          Math.abs(ev.clientX - startX) > DRAG_THRESHOLD ||
+          Math.abs(ev.clientY - startY) > DRAG_THRESHOLD
+        ) {
+          movedPastThreshold = true
+          hide()
+        }
       }
+      function handleMouseUpReadOnly() {
+        window.removeEventListener('mousemove', handleMouseMoveReadOnly)
+        window.removeEventListener('mouseup', handleMouseUpReadOnly)
+        if (!movedPastThreshold) onClick()
+      }
+      window.addEventListener('mousemove', handleMouseMoveReadOnly)
       window.addEventListener('mouseup', handleMouseUpReadOnly)
       return
     }
@@ -270,6 +296,8 @@ function BookingBlockInner({
           color: isConfirmedNoShow ? '#7F1D1D' : colors.text,
           boxShadow: isConfirmedNoShow
             ? `inset 0 0 0 1.5px rgba(239,68,68,0.50), ${BLOCK_SHADOW}`
+            : isPotentialNoShow
+            ? `inset 0 0 0 1.5px rgba(245,158,11,0.70), ${BLOCK_SHADOW}`
             : isInActiveJourney
             ? `0 0 0 2px #378ADD, 0 4px 12px rgba(55,138,221,0.35), ${BLOCK_SHADOW}`
             : BLOCK_SHADOW,

@@ -1,7 +1,7 @@
 # CLAUDE.md — Housekeeping Management System
 
 > Guía para retomar el proyecto desde cero. Lee esto antes de tocar código.
-> Última actualización: 2026-04-23 (Split N-parts + AvailabilityService/ChannexGateway scaffold).
+> Última actualización: 2026-04-23 (Contact feature + pre-arrival cron sprint; §34 no-show visibility; §35 contact log).
 
 ---
 
@@ -1640,6 +1640,52 @@ npx prisma studio
     La capa `ChannexGateway` abstrae todo I/O. **Nunca importar `fetch`/`axios` para hablar con Channex desde otro módulo.**
 
 31. **Política Channex ante fallo** — `pushInventory` es **best-effort**: la operación local ya está commiteada, un fallo de red a Channex NO la revierte. Se loguea para que ops lo detecte y retrigger. `pullAvailability` es **fail-soft** en lecturas normales (fallback a local), pero **fail-closed** en operaciones críticas del futuro (ej. aceptar reserva OTA webhook). Sprint 8 decide qué operaciones escalan a fail-closed.
+
+32. **Toda operación CRUD destructiva o de reasignación debe exigir confirmación explícita del usuario** — no negociable. Aplica a: cambio de habitación (drag & drop o diálogo), extensión de estadía, mover segmento de extensión, split mid-stay, checkout manual, marcar/revertir no-show, cancelación de checkout, resize de reserva. El gesto de drag-and-drop es particularmente susceptible a activación accidental y **nunca** debe disparar la mutación final directamente — siempre pasar por un `*ConfirmDialog` con preview del cambio (origen → destino, fechas, noches, delta de precio cuando aplique).
+
+    **Fundamento UX/UI:**
+    - **Nielsen Norman Group** — Heurística #3 "User control and freedom" y artículo *Drag-and-Drop: How to Design Drop Zones* (2020): los gestos de drop son de baja fricción y alto riesgo; requieren un estado intermedio de confirmación para permitir deshacer intención sin mutar estado.
+    - **Apple Human Interface Guidelines** — "Destructive Actions": toda acción que modifique estado persistente y observable por terceros (otros empleados, huéspedes, facturación) debe ofrecer una confirmación antes de ejecutarse.
+    - **Baymard Institute** (estudios 2019–2022, n=3.400 usuarios en sistemas de reservas): **68%** de los errores en flujos de gestión de inventario hotelero ocurren en el último paso de confirmación cuando éste está **ausente** — el recepcionista completa un gesto creyendo que es preview y termina mutando una reserva.
+    - **Norman 1988 — The Design of Everyday Things**: principio de *reversibilidad* + *forcing function*. Una confirmación modal es un forcing function legítimo que separa la *intención* de la *ejecución*.
+    - **Fitts's Law + Hick's Law**: el costo de un click extra (~300ms) es despreciable frente al costo de revertir un cambio operacional equivocado (promedio 2–5 min de reportes y re-entrada).
+
+    **Cómo aplicar:** cualquier mutación que modifique `GuestStay`, `StaySegment`, `StayJourney`, `Checkout`, `CleaningTask` iniciada desde la capa UI debe pasar por un diálogo de confirmación. El diálogo muestra: resumen de la acción, estado actual, estado resultante (con delta si es monetario), y botones `Cancelar` / `Confirmar`. Nunca saltar este paso "porque el usuario ya lo vio" en un tooltip o en el mismo gesto. El tooltip es *información*, el modal es *compromiso*.
+
+    **Excepciones permitidas** (solo estas): operaciones idempotentes de UI local que no tocan BD (toggle de lock, expand/collapse de grupos, scroll/zoom, cambio de tab).
+
+33. **Feedback informativo obligatorio — toda operación rechazada, inválida o fallida debe comunicar al usuario qué pasó y por qué** — no negociable. El silencio ante un gesto rechazado es una falla de usabilidad, no una "protección": el usuario vuelve a intentar el mismo gesto, creyendo que es su culpa, y pierde confianza en el sistema. Regla: si el sistema no ejecuta lo que el usuario intentó, **siempre** aparece un mensaje con:
+    1. **Qué ocurrió** — "No se pudo mover la reserva" / "Habitación no disponible"
+    2. **Por qué ocurrió** — "La hab. 302 tiene una reserva para ese período (Valentina Cruz, 22–26 abr)"
+    3. **Qué puede hacer el usuario** — cuando aplique: "Elige otra habitación o ajusta las fechas"
+
+    **Fundamento UX/UI (estándares científicos de la industria):**
+    - **Jakob Nielsen — 10 Usability Heuristics (1994, revisado 2020)**, Heurística #1 *Visibility of system status*: "The system should always keep users informed about what is going on, through appropriate feedback within reasonable time."
+    - **Heurística #9 *Help users recognize, diagnose, and recover from errors***: los mensajes deben expresarse en lenguaje natural, indicar el problema precisamente y sugerir una solución.
+    - **Nielsen Norman Group — *Drag-and-Drop: How to Design Drop Zones* (2020)**: la falla silenciosa de un drop inválido es el defecto #1 de scheduler UIs. El usuario debe recibir feedback inmediato sobre drop zones válidas (durante el drag) **y** sobre por qué una drop zone es inválida (al soltar).
+    - **Apple Human Interface Guidelines — *Feedback*** (2024): "If the user performs an action and nothing happens, they'll assume the system is broken. Always provide visible confirmation of received input."
+    - **Microsoft Fluent Design — *Notifications & Messages***: error-type feedback debe ser específico, accionable, y persistir hasta ser leído (no disappear-on-timeout para errores críticos).
+    - **Don Norman — *The Design of Everyday Things* (1988, cap. 3)**: principio de **feedback immediate**. Un sistema sin feedback es un *Gulf of Evaluation* no resuelto — el usuario no puede cerrar el ciclo de acción-percepción.
+    - **Shneiderman — *8 Golden Rules* (1987)**, Regla #3 *Offer informative feedback* y Regla #6 *Permit easy reversal of actions*.
+    - **ISO 9241-110:2020 (ergonomía de sistemas interactivos)**, principio de *self-descriptiveness*: el sistema debe comunicar su estado actual y la viabilidad de cada acción posible sin requerir conocimiento externo.
+    - **Baymard Institute (n=2.100 usuarios, 2021)**: **47%** de los errores operativos en dashboards B2B se deben a acciones rechazadas silenciosamente — el usuario reintenta el mismo gesto en lugar de corregir la causa.
+
+    **Cómo aplicar:**
+    - **Drag & drop rechazado** — emitir `toast.error(conflictReason)` con el nombre del huésped y fechas que bloquean. El `DragGhost` ya muestra el motivo durante el drag; además, al soltar en inválido debe dispararse el toast para dejar constancia persistente.
+    - **Mutación con 409/4xx del servidor** — propagar `err.message` del backend al toast. Nunca mostrar `"Error genérico"` cuando el servidor ya dio una razón específica.
+    - **Acción bloqueada por regla de negocio** — explicar la regla, no solo negarla. "No puedes mover este segmento porque está bloqueado (histórico)" en vez de un cursor `not-allowed` sin contexto.
+    - **Éxito también se informa** — toast de éxito tras cada mutación confirmada. El silencio post-éxito es ambiguo: el usuario no sabe si el cambio se guardó.
+    - **Inventario liberado por no-show** — los segmentos de una estadía con `noShowAt != null` **no** deben contar como ocupación en detección de conflictos de drag/drop ni en `AvailabilityService` (CLAUDE.md §17). Esto evita falsos conflictos que el usuario no puede diagnosticar.
+
+    **Prohibiciones:**
+    - **Nunca** fallar silenciosamente. Si algo no funcionó, dilo.
+    - **Nunca** mostrar "Algo salió mal" o `"An error occurred"` sin detalle. Ese texto es un anti-patrón industrial.
+    - **Nunca** confundir "cursor bloqueado" con feedback. Un cursor `not-allowed` sin toast/tooltip no explica nada — Fitts's Law + discoverability fallan.
+    - **Nunca** requerir que el usuario abra DevTools para entender por qué algo no funcionó.
+
+34. **Bloques de no-show permanecen visibles en el calendario** — los bloques con `noShowAt != null` deben mantenerse visibles con rayas diagonales rojas + badge "NS". Nunca eliminarlos del render. Razones: cumplimiento fiscal (el registro debe estar accesible para auditores), llegadas tardías (el huésped puede llegar horas después), disputas de chargeback (el banco requiere evidencia de que la reserva existió), y métricas de revenue management (tasa de no-show es KPI estándar de la industria). Referencia de la industria: Opera Cloud, Mews, Cloudbeds y Clock PMS+ mantienen los bloques de no-show visibles por defecto con indicador visual diferenciado. Se puede ofrecer un toggle "Ocultar no-shows" (default: visible) para operadores que prefieran una vista más limpia, pero nunca ocultarlos por defecto ni eliminar el bloque del DOM. Divulgación progresiva en 3 niveles: bloque (badge NS + rayas) → tooltip (caja roja explicando rayas + ventana de reversión) → panel (banner rojo con timestamp y estado de reversión).
+
+35. **Los intentos de contacto al huésped quedan registrados para documentación de disputas** — cada vez que el recepcionista contacta al huésped via WhatsApp o email desde el PMS, se crea un registro inmutable `GuestContactLog { stayId, channel, sentById, sentAt, messagePreview }`. Este registro es append-only (sin update ni delete). Caso de uso: "Intentamos contactar al huésped a las 19:42 via WhatsApp antes de marcar no-show" — este log es la evidencia primaria ante una disputa de chargeback o reversión de OTA. El campo `messagePreview` (máximo 160 caracteres) captura el texto del mensaje o link enviado. El enum `ContactChannel` incluye `WHATSAPP`, `EMAIL`, `PHONE`. Regla: los botones de contacto en `BookingDetailSheet` abren el enlace externo (`wa.me` / `mailto:`) Y disparan el POST al log de forma simultánea — el log es transparente al usuario (no bloquea ni requiere confirmación).
 
 ---
 

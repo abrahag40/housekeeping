@@ -18,6 +18,10 @@ import {
   RotateCcw,
   ExternalLink,
   X,
+  MessageCircle,
+  CreditCard,
+  HandCoins,
+  AlertCircle,
 } from 'lucide-react'
 
 import { format, differenceInDays, differenceInHours } from 'date-fns'
@@ -31,6 +35,7 @@ import {
 
 import { getStayStatus } from '../../utils/timeline.utils'
 import { PaymentStatusBadge } from '../shared/PaymentStatusBadge'
+import { useLogContact, useChargeNoShow, useWaiveNoShow } from '../../hooks/useGuestStays'
 
 import type { GuestStayBlock } from '../../types/timeline.types'
 
@@ -57,6 +62,11 @@ export function BookingDetailSheet({
   const [showNoShowConfirm, setShowNoShowConfirm] = useState(false)
   const [noShowReason, setNoShowReason] = useState('')
   const [waiveCharge, setWaiveCharge] = useState(false)
+  const logContact  = useLogContact(stay?.id ?? '')
+  const chargeNoShow = useChargeNoShow(stay?.id ?? '')
+  const waiveNoShow  = useWaiveNoShow(stay?.id ?? '')
+  const [showWaiveInput, setShowWaiveInput] = useState(false)
+  const [waiveReason, setWaiveReason] = useState('')
 
   if (!stay) return null
 
@@ -205,6 +215,32 @@ export function BookingDetailSheet({
           className="h-[3px] flex-shrink-0"
           style={{ backgroundColor: otaColor }}
         />
+
+        {/* No-show status banner — explains the visual (diagonal stripes, NS badge) and shows the timeline */}
+        {isNoShow && (
+          <div className="mx-4 mt-3 mb-1 rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 flex items-start gap-2.5 shrink-0">
+            <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center shrink-0 mt-0.5">
+              <UserX className="h-3.5 w-3.5 text-red-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-red-800">No-show confirmado</p>
+              <p className="text-[11px] text-red-600 mt-0.5">
+                Marcado el{' '}
+                {format(stay.noShowAt!, "d 'de' MMMM · HH:mm", { locale: es })}
+              </p>
+              {canRevert ? (
+                <p className="text-[10px] text-red-500 mt-1 font-medium flex items-center gap-1">
+                  <RotateCcw className="h-3 w-3 shrink-0" />
+                  Ventana de reversión activa (48 h) · usa el botón de abajo
+                </p>
+              ) : (
+                <p className="text-[10px] text-red-400 mt-1">
+                  Habitación liberada y disponible para nueva venta
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Tabs: list OUTSIDE the scroll area so it stays fixed while content scrolls */}
         <Tabs defaultValue="stay" className="flex-1 flex flex-col min-h-0">
@@ -503,6 +539,129 @@ export function BookingDetailSheet({
 
                 <PaymentStatusBadge status={stay.paymentStatus} />
               </div>
+
+              {/* ── Sección de cargo de no-show (visible solo si hay noShowAt) ── */}
+              {stay.noShowAt && (
+                <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3.5 space-y-3">
+                  <p className="text-xs font-semibold text-red-800 flex items-center gap-1.5">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    Cargo de no-show
+                    {stay.noShowFeeAmount != null && (
+                      <span className="ml-auto font-mono">
+                        {stay.noShowFeeCurrency ?? stay.currency}{' '}
+                        {stay.noShowFeeAmount.toLocaleString()}
+                      </span>
+                    )}
+                  </p>
+
+                  {/* Estado PENDING + sin tarjeta */}
+                  {stay.noShowChargeStatus === 'PENDING' && !stay.stripePaymentMethodId && (
+                    <p className="text-[11px] text-red-600">
+                      Sin tarjeta registrada — cobro manual necesario.
+                    </p>
+                  )}
+
+                  {/* Estado PENDING + hay tarjeta → botones de acción */}
+                  {stay.noShowChargeStatus === 'PENDING' && stay.stripePaymentMethodId && (
+                    <>
+                      {!showWaiveInput ? (
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="flex-1 text-xs bg-red-600 hover:bg-red-700 text-white h-8"
+                            disabled={chargeNoShow.isPending}
+                            onClick={() => chargeNoShow.mutate()}
+                          >
+                            <CreditCard className="h-3.5 w-3.5 mr-1.5" />
+                            {chargeNoShow.isPending ? 'Procesando…' : 'Procesar cargo'}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 text-xs h-8 border-red-200 text-red-700 hover:bg-red-100"
+                            onClick={() => setShowWaiveInput(true)}
+                          >
+                            <HandCoins className="h-3.5 w-3.5 mr-1.5" />
+                            Perdonar
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <input
+                            autoFocus
+                            type="text"
+                            placeholder="Razón para perdonar (obligatoria)"
+                            value={waiveReason}
+                            onChange={(e) => setWaiveReason(e.target.value)}
+                            className="w-full text-xs border border-red-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-red-300"
+                          />
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="flex-1 text-xs h-8"
+                              onClick={() => { setShowWaiveInput(false); setWaiveReason('') }}
+                            >
+                              Cancelar
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="flex-1 text-xs h-8 bg-amber-600 hover:bg-amber-700 text-white"
+                              disabled={waiveReason.trim().length < 5 || waiveNoShow.isPending}
+                              onClick={() => {
+                                waiveNoShow.mutate(waiveReason)
+                                setShowWaiveInput(false)
+                                setWaiveReason('')
+                              }}
+                            >
+                              Confirmar perdón
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Estado CHARGED */}
+                  {stay.noShowChargeStatus === 'CHARGED' && (
+                    <p className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                      Cargo procesado ✓
+                    </p>
+                  )}
+
+                  {/* Estado FAILED → reintentar */}
+                  {stay.noShowChargeStatus === 'FAILED' && (
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] text-red-700 font-semibold">Cobro fallido</p>
+                      {stay.stripePaymentMethodId && (
+                        <Button
+                          size="sm"
+                          className="w-full text-xs bg-red-600 hover:bg-red-700 text-white h-8"
+                          disabled={chargeNoShow.isPending}
+                          onClick={() => chargeNoShow.mutate()}
+                        >
+                          <CreditCard className="h-3.5 w-3.5 mr-1.5" />
+                          {chargeNoShow.isPending ? 'Procesando…' : '↻ Reintentar cobro'}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Estado WAIVED */}
+                  {stay.noShowChargeStatus === 'WAIVED' && (
+                    <p className="text-[11px] font-semibold text-amber-700 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                      Cargo perdonado
+                    </p>
+                  )}
+
+                  {/* Estado NOT_APPLICABLE */}
+                  {stay.noShowChargeStatus === 'NOT_APPLICABLE' && (
+                    <p className="text-[11px] text-slate-500">Sin cargo aplicable</p>
+                  )}
+                </div>
+              )}
             </TabsContent>
 
             {/* TAB GUEST */}
@@ -543,6 +702,63 @@ export function BookingDetailSheet({
                       </div>
                     </div>
                   ))}
+
+                {/* Contact buttons — fire-and-forget, log kept for dispute docs (CLAUDE.md §35) */}
+                {(stay.guestPhone || stay.guestEmail) ? (
+                  <div className="pt-1">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                      Contactar
+                    </div>
+                    <div className="flex gap-2">
+                      {stay.guestPhone && (
+                        <a
+                          href={`https://wa.me/${stay.guestPhone.replace(/\D/g, '')}?text=Hola%20${encodeURIComponent(stay.guestName)}%2C%20te%20contactamos%20del%20hotel`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() =>
+                            logContact.mutate({
+                              channel: 'WHATSAPP',
+                              messagePreview: `wa.me/${stay.guestPhone} — ${stay.guestName}`,
+                            })
+                          }
+                          className={cn(
+                            'flex-1 flex items-center justify-center gap-1.5',
+                            'text-xs font-semibold py-2 px-3 rounded-lg',
+                            'bg-[#25D366] hover:bg-[#1ebe5a] text-white',
+                            'transition-colors',
+                          )}
+                        >
+                          <MessageCircle className="h-3.5 w-3.5" />
+                          WhatsApp
+                        </a>
+                      )}
+                      {stay.guestEmail && (
+                        <a
+                          href={`mailto:${stay.guestEmail}?subject=${encodeURIComponent(`Reserva ${stay.pmsReservationId ?? stay.id}`)}`}
+                          onClick={() =>
+                            logContact.mutate({
+                              channel: 'EMAIL',
+                              messagePreview: `mailto:${stay.guestEmail} — ${stay.guestName}`,
+                            })
+                          }
+                          className={cn(
+                            'flex-1 flex items-center justify-center gap-1.5',
+                            'text-xs font-semibold py-2 px-3 rounded-lg',
+                            'bg-blue-600 hover:bg-blue-700 text-white',
+                            'transition-colors',
+                          )}
+                        >
+                          <Mail className="h-3.5 w-3.5" />
+                          Email
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 text-center py-1">
+                    Sin datos de contacto
+                  </p>
+                )}
               </div>
             </TabsContent>
           </div>

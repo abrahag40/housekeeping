@@ -263,8 +263,9 @@ model Room {
   capacity        Int
   status          RoomStatus  @default(AVAILABLE) @map("room_status")
   roomTypeId      String?     @map("room_type_id")
-  cloudbedsRoomId String?
-  notes           String?
+  cloudbedsRoomId   String?
+  channexRoomTypeId String?   @map("channex_room_type_id")   // ID del room type en Channex.io (Sprint 8)
+  notes             String?
   deletedAt       DateTime?   @map("deleted_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
 
@@ -334,6 +335,7 @@ model HousekeepingStaff {
   requestedBlocks       RoomBlock[]      @relation("BlocksRequested")
   approvedBlocks        RoomBlock[]      @relation("BlocksApproved")
   blockLogs             BlockLog[]       @relation("BlockLogs")
+  contactLogs           GuestContactLog[] @relation("ContactLogs")
 
   @@index([organizationId])
   @@index([organizationId, propertyId])
@@ -517,6 +519,15 @@ model PropertySettings {
   // Fecha (solo date, no datetime) del último procesamiento de no-shows.
   // El scheduler la compara con la fecha local actual para evitar doble ejecución.
   noShowProcessedDate DateTime? @db.Date @map("no_show_processed_date")
+  // Pre-arrival warning cron: hora local (0-23) a partir de la cual el cron detecta
+  // potenciales no-shows (huéspedes que debían llegar pero no lo hicieron aún).
+  // Default 20 = 8 PM local. Si enableAutoOutreach es true, se envía WhatsApp/email.
+  potentialNoShowWarningHour    Int       @default(20) @map("potential_no_show_warning_hour")
+  potentialNoShowProcessedDate  DateTime? @db.Date @map("potential_no_show_processed_date")
+  enableAutoOutreach            Boolean   @default(false) @map("enable_auto_outreach")
+  // Channex.io channel manager (Sprint 8): ID de la propiedad en Channex para push de inventario.
+  // Opcional — sin él, pushInventory() es no-op (fail-soft).
+  channexPropertyId             String?   @map("channex_property_id")
   deletedAt           DateTime? @map("deleted_at")
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
@@ -618,6 +629,12 @@ model GuestStay {
   noShowChargeStatus NoShowChargeStatus? @map("no_show_charge_status")
   noShowRevertedAt   DateTime?           @map("no_show_reverted_at")
   noShowRevertedById String?             @map("no_show_reverted_by_id")
+  // ── Stripe card-on-file (Sprint 8) ───────────────────────────────────────
+  // Guardados al hacer check-in via SetupIntent (usage: 'off_session').
+  // stripePaymentIntentId se genera al procesar el cargo de no-show.
+  stripeCustomerId      String?   @map("stripe_customer_id")
+  stripePaymentMethodId String?   @map("stripe_payment_method_id")
+  stripePaymentIntentId String?   @map("stripe_payment_intent_id")
   deletedAt         DateTime?     @map("deleted_at")
   createdAt         DateTime      @default(now()) @map("created_at")
   updatedAt         DateTime      @updatedAt @map("updated_at")
@@ -646,10 +663,11 @@ model GuestStay {
   //   updatedAt         DateTime @updatedAt
   // }
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  room         Room         @relation(fields: [roomId], references: [id])
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  room         Room              @relation(fields: [roomId], references: [id])
   stayJourney  StayJourney?
   staySegments StaySegment[]
+  contactLogs  GuestContactLog[]
 
   @@index([organizationId])
   @@index([organizationId, propertyId])
@@ -1045,4 +1063,32 @@ model BlockLog {
   @@index([blockId])
   @@index([createdAt])
   @@map("block_logs")
+}
+
+// ── Guest contact channel ─────────────────────────────────────────────────────
+enum ContactChannel {
+  WHATSAPP
+  EMAIL
+  PHONE
+}
+
+// ── Guest contact log (append-only, for dispute documentation) ───────────────
+// Cada intento de contacto queda registrado: quién lo hizo, cuándo, por qué canal.
+// Usar como evidencia ante chargebacks u otras disputas con OTAs.
+model GuestContactLog {
+  id             String         @id @default(uuid())
+  stayId         String         @map("stay_id")
+  channel        ContactChannel
+  // sentById es null para envíos automáticos del sistema (cron de potencial no-show).
+  // Non-null para envíos manuales desde BookingDetailSheet (recepcionista identificado).
+  sentById       String?        @map("sent_by_id")
+  sentAt         DateTime       @default(now()) @map("sent_at")
+  messagePreview String?        @map("message_preview")
+
+  stay   GuestStay          @relation(fields: [stayId], references: [id])
+  sentBy HousekeepingStaff? @relation("ContactLogs", fields: [sentById], references: [id])
+
+  @@index([stayId])
+  @@index([sentAt])
+  @@map("guest_contact_logs")
 }

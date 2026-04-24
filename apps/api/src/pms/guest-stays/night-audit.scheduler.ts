@@ -36,6 +36,11 @@ import { Injectable, Logger } from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
 import { PrismaService } from '../../prisma/prisma.service'
 import { GuestStaysService } from './guest-stays.service'
+import { ChannexGateway } from '../../integrations/channex/channex.gateway'
+
+function toDateString(date: Date): string {
+  return date.toISOString().split('T')[0]
+}
 
 function toLocalDate(date: Date, timezone: string): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -63,6 +68,7 @@ export class NightAuditScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly guestStaysService: GuestStaysService,
+    private readonly channex: ChannexGateway,
   ) {}
 
   /**
@@ -80,6 +86,7 @@ export class NightAuditScheduler {
         timezone:            true,
         noShowCutoffHour:    true,
         noShowProcessedDate: true,
+        channexPropertyId:   true,
         property: {
           select: {
             organizationId: true,
@@ -138,7 +145,12 @@ export class NightAuditScheduler {
           noShowAt:       null,
           checkinAt: { gte: dayStart, lte: dayEnd },
         },
-        select: { id: true, guestName: true },
+        select: {
+          id: true,
+          guestName: true,
+          scheduledCheckout: true,
+          room: { select: { channexRoomTypeId: true } },
+        },
       })
 
       if (overdueStays.length === 0) {
@@ -163,6 +175,24 @@ export class NightAuditScheduler {
             orgId ?? '',
             settings.propertyId,
           )
+
+          // Notificar a Channex.io que la unidad quedó libre — best-effort (§31).
+          // Solo si la propiedad y la habitación tienen IDs de Channex configurados.
+          const channexRoomTypeId = stay.room?.channexRoomTypeId
+          if (settings.channexPropertyId && channexRoomTypeId) {
+            this.channex.pushInventory({
+              channexPropertyId: settings.channexPropertyId,
+              roomTypeId:        channexRoomTypeId,
+              dateFrom:          localDate,
+              dateTo:            toDateString(stay.scheduledCheckout),
+              delta:             +1,  // liberar unidad
+              reason:            'RELEASE',
+              traceId:           `noshow_audit_${stay.id}`,
+            }).catch((err: Error) =>
+              this.logger.error(`[NightAudit] Channex push failed stay=${stay.id}: ${err.message}`)
+            )
+          }
+
           processed++
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err)

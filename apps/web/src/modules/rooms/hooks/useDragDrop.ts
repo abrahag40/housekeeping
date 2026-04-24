@@ -9,6 +9,12 @@ interface UseDragDropParams {
   flatRows: FlatRow[]
   stays: GuestStayBlock[]
   onDropSuccess: (result: DropResult) => void
+  /** Called when the user drops on an invalid target (conflict). Used to surface
+   *  a visible error toast so the receptionist understands *why* the drop was
+   *  rejected — silent failure violates Nielsen #1 (system status visibility). */
+  onDropInvalid?: (reason: string) => void
+  /** Called when the user starts dragging a block that has no movable handle
+   *  (locked segment, past stay, etc.). Used to explain the block in context. */
 }
 
 function findRoomAtGridY(flatRows: FlatRow[], gridY: number) {
@@ -49,6 +55,7 @@ function hasConflict(params: {
     if (s.id === stayId) return false
     if (s.roomId !== targetRoomId) return false
     if (s.actualCheckout) return false // already checked out — not a real occupancy conflict
+    if (s.noShowAt) return false       // no-show releases inventory (CLAUDE.md §17)
 
     const sIn = startOfDay(new Date(s.checkIn))
     const sOut = startOfDay(new Date(s.checkOut))
@@ -68,6 +75,7 @@ export function useDragDrop({
   flatRows,
   stays,
   onDropSuccess,
+  onDropInvalid,
 }: UseDragDropParams) {
   const [dragState, setDragState] = useState<DragState | null>(null)
 
@@ -149,6 +157,11 @@ export function useDragDrop({
         newCheckIn: current.currentCheckIn,
         newCheckOut: current.currentCheckOut,
       })
+    } else if (moved && !current.isValid && onDropInvalid) {
+      // Surface the rejection reason. Silent failure on drag-drop is the top
+      // usability defect in scheduler UIs (NNG 2020 — Drag-and-Drop: How to
+      // Design Drop Zones); the user must know *why* their gesture didn't work.
+      onDropInvalid(current.conflictReason ?? 'La habitación destino no está disponible')
     }
 
     dragStateRef.current = null
