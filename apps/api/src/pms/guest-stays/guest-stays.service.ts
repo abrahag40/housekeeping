@@ -15,6 +15,7 @@ import { MoveRoomDto } from './dto/move-room.dto'
 import type { AvailabilityConflict, RoomAvailabilityResult } from '@zenix/shared'
 import { Prisma } from '@prisma/client'
 import { StayJourneyService } from '../stay-journeys/stay-journeys.service'
+import { ChannexGateway } from '../../integrations/channex/channex.gateway'
 
 /** Returns the local date string (YYYY-MM-DD) for a given UTC date in the specified IANA timezone. */
 function toLocalDate(date: Date, timezone: string): string {
@@ -47,6 +48,7 @@ export class GuestStaysService {
     private readonly events: EventEmitter2,
     private readonly email: EmailService,
     private readonly journeyService: StayJourneyService,
+    private readonly channex: ChannexGateway,
   ) {}
 
   async create(dto: CreateGuestStayDto, actorId: string) {
@@ -632,6 +634,7 @@ export class GuestStaysService {
       where: { id: stayId, organizationId: orgId },
       include: {
         stayJourney: { select: { id: true } },
+        room:        { select: { channexRoomTypeId: true } },
       },
     })
     if (!stay) throw new NotFoundException('Estadía no encontrada')
@@ -688,6 +691,28 @@ export class GuestStaysService {
       propertyId: stay.propertyId,
       orgId,
     })
+
+    // Notificar a Channex que la unidad vuelve a estar ocupada — best-effort (§31).
+    const propertySettings = await this.prisma.propertySettings.findUnique({
+      where:  { propertyId: stay.propertyId },
+      select: { channexPropertyId: true, timezone: true },
+    })
+    const channexRoomTypeId = stay.room?.channexRoomTypeId
+    if (propertySettings?.channexPropertyId && channexRoomTypeId) {
+      const tz        = propertySettings.timezone ?? 'UTC'
+      const localDate = toLocalDate(new Date(), tz)
+      this.channex.pushInventory({
+        channexPropertyId: propertySettings.channexPropertyId,
+        roomTypeId:        channexRoomTypeId,
+        dateFrom:          localDate,
+        dateTo:            toLocalDate(stay.scheduledCheckout, tz),
+        delta:             -1,  // re-ocupar unidad
+        reason:            'RESERVATION',
+        traceId:           `noshow_revert_${stayId}`,
+      }).catch((err: Error) =>
+        this.logger.error(`[revertNoShow] Channex push failed stay=${stayId}: ${err.message}`)
+      )
+    }
 
     this.logger.log(`No-show revertido: stay=${stayId}`)
     return { success: true }
@@ -763,5 +788,33 @@ export class GuestStaysService {
     })
 
     this.logger.log(`[NightAudit] No-show automático: stay=${stayId} guest="${stay.guestName}"`)
+  }
+
+  /**
+   * POST /v1/guest-stays/:id/contact-log
+   * Registra un intento de contacto al huésped (WhatsApp, email, teléfono).
+   * Append-only — el registro queda como evidencia ante disputas o chargebacks.
+   */
+  async logContact(
+    stayId: string,
+    actorId: string | null,
+    channel: import('@prisma/client').ContactChannel,
+    messagePreview?: string,
+  ) {
+    const orgId = this.tenant.getOrganizationId()
+    const stay = await this.prisma.guestStay.findUnique({
+      where: { id: stayId, organizationId: orgId },
+      select: { id: true },
+    })
+    if (!stay) throw new NotFoundException(`Estadía ${stayId} no encontrada`)
+
+    return this.prisma.guestContactLog.create({
+      data: {
+        stayId,
+        channel,
+        sentById: actorId,
+        messagePreview: messagePreview?.slice(0, 160),
+      },
+    })
   }
 }

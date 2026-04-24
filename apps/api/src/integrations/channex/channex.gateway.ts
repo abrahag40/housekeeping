@@ -3,44 +3,43 @@ import { ConfigService } from '@nestjs/config'
 
 // ── Channex.io Channel Manager Gateway ───────────────────────────────────────
 //
-// Responsibility: abstract all I/O against api.channex.io so the rest of the
-// codebase never talks to the Channex HTTP API directly. Every module that
-// touches inventory (AvailabilityService) goes through this gateway.
+// Centraliza todo el I/O contra api.channex.io. Ningún módulo externo habla
+// con Channex directamente — siempre a través de este gateway.
 //
-// Why a gateway: (a) Channex credentials live in one place, (b) rate-limit
-// handling and retry logic are centralized, (c) Sprint 8 swaps the stub with
-// real HTTP calls without touching consumers.
+// Auth: header `user-api-key` en cada request (Channex API docs).
+// Base URL: CHANNEX_BASE_URL (default: https://app.channex.io/api/v1)
+// Política de fallos (CLAUDE.md §31): pushInventory es best-effort.
+//   - Si Channex falla, la operación local ya está commiteada → log, NO revertir.
+//   - pullAvailability en lecturas normales: fail-soft (retorna fromChannex:false).
 //
-// Reference: https://docs.channex.io/api-v1  (see CLAUDE.md §Sprint 8)
+// Endpoints implementados:
+//   GET  /v1/room_types/:id/availabilities?date_from&date_to  (pull allotment)
+//   POST /v1/availability                                      (push inventory delta)
+//   POST /v1/restrictions                                      (stop-sell, MLOS) — stub
 //
-// Endpoints this gateway will hit in Sprint 8:
-//   GET  /v1/room_types/:id/availabilities?date_from=&date_to=   (pull)
-//   POST /v1/availability                                         (push inventory)
-//   POST /v1/restrictions                                         (push stop-sell, MLOS)
-//   POST /v1/rates                                                (push rates)
-//   Webhooks (inbound): booking_new, booking_modify, booking_cancel
+// Webhooks inbound (booking_new, booking_modify, booking_cancel):
+//   Consumidos en /api/webhooks/channex (integrations/cloudbeds — ver Sprint 8).
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Tipos ─────────────────────────────────────────────────────────────────────
 
 export interface ChannexAvailabilitySlot {
-  date: string            // ISO date YYYY-MM-DD (local day of the property)
-  roomTypeId: string      // Channex room_type_id (mapped from internal roomId via RoomTypeMapping)
-  available: number       // remaining allotment across all channels
+  date: string            // YYYY-MM-DD (día local de la propiedad)
+  roomTypeId: string      // Channex room_type_id
+  available: number       // allotment total en todos los canales
   stopSell: boolean
 }
 
 export interface ChannexInventoryUpdate {
-  roomTypeId: string
-  dateFrom: string        // ISO YYYY-MM-DD
-  dateTo: string          // ISO YYYY-MM-DD (exclusive)
-  delta: number           // -1 per night when reserving, +1 when releasing
+  channexPropertyId?: string  // Property ID en Channex (de PropertySettings.channexPropertyId)
+  roomTypeId: string          // Room type ID en Channex (de Room.channexRoomTypeId)
+  dateFrom: string            // YYYY-MM-DD (inclusive)
+  dateTo: string              // YYYY-MM-DD (inclusive)
+  delta: number               // +1 = liberar una unidad, -1 = ocupar una unidad
   reason: 'RESERVATION' | 'CANCELLATION' | 'ROOM_MOVE' | 'SPLIT' | 'BLOCK' | 'RELEASE'
-  // Internal trace id to correlate with our audit trail
-  traceId: string
+  traceId: string             // ID interno para correlacionar con audit trail
 }
 
 export interface ChannexPullResult {
-  /** True if we got a real answer from Channex; false if gateway is disabled */
   fromChannex: boolean
   slots: ChannexAvailabilitySlot[]
 }
@@ -53,17 +52,28 @@ export class ChannexGateway {
 
   constructor(private readonly config: ConfigService) {}
 
-  /** Whether Channex integration is enabled for this property/environment. */
-  get enabled(): boolean {
-    return this.config.get<string>('CHANNEX_ENABLED') === 'true'
+  private get apiKey(): string | undefined {
+    return this.config.get<string>('CHANNEX_API_KEY')
   }
 
-  /**
-   * Pull availability for a room_type across a date range.
-   *
-   * Sprint 8: GET /v1/room_types/:id/availabilities?date_from&date_to
-   * Today:    returns { fromChannex: false } — consumers fall back to local DB.
-   */
+  private get baseUrl(): string {
+    return (
+      this.config.get<string>('CHANNEX_BASE_URL') ??
+      'https://app.channex.io/api/v1'
+    )
+  }
+
+  /** True si las credenciales están configuradas. Sin ellas, todas las llamadas son no-op. */
+  get enabled(): boolean {
+    return !!this.apiKey
+  }
+
+  // ─── Pull availability ──────────────────────────────────────────────────────
+  //
+  // Channex endpoint: GET /room_types/:id/availabilities?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+  // Respuesta: { data: [{ attributes: { availability: [{date, availability, stop_sell}] } }] }
+  //
+  // Fail-soft en lecturas — los consumidores vuelven a datos locales si Channex no responde.
   async pullAvailability(params: {
     roomTypeId: string
     dateFrom: Date
@@ -73,33 +83,115 @@ export class ChannexGateway {
       return { fromChannex: false, slots: [] }
     }
 
-    // TODO(sprint8): implement real HTTP call with user-api-key header.
-    // const res = await fetch(`${this.baseUrl}/room_types/${params.roomTypeId}/availabilities?...`)
-    // Map response → ChannexAvailabilitySlot[]
-    this.logger.warn('pullAvailability called but Sprint 8 impl is pending')
-    return { fromChannex: false, slots: [] }
+    const from = toDateString(params.dateFrom)
+    const to   = toDateString(params.dateTo)
+    const url  = `${this.baseUrl}/room_types/${params.roomTypeId}/availabilities?date_from=${from}&date_to=${to}`
+
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'user-api-key': this.apiKey!,
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        this.logger.warn(`[Channex] pullAvailability HTTP ${res.status}: ${text}`)
+        return { fromChannex: false, slots: [] }
+      }
+
+      const json = await res.json() as {
+        data?: { attributes?: { availability?: Array<{ date: string; availability: number; stop_sell: boolean }> } }[]
+      }
+
+      const raw = json.data?.[0]?.attributes?.availability ?? []
+      const slots: ChannexAvailabilitySlot[] = raw.map((item) => ({
+        date:       item.date,
+        roomTypeId: params.roomTypeId,
+        available:  item.availability,
+        stopSell:   item.stop_sell,
+      }))
+
+      return { fromChannex: true, slots }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.warn(`[Channex] pullAvailability failed: ${msg} — using local data`)
+      return { fromChannex: false, slots: [] }
+    }
   }
 
-  /**
-   * Push an inventory delta to Channex so all connected channels see the
-   * updated allotment. Fire-and-forget: we log on failure, do not throw.
-   *
-   * Sprint 8: POST /v1/availability with room_type_id, date, availability
-   */
+  // ─── Push inventory delta ───────────────────────────────────────────────────
+  //
+  // Channex endpoint: POST /availability
+  // Body: { values: [{ property_id, room_type_id, date, availability }] }
+  //
+  // Nota: Channex acepta valores ABSOLUTOS, no deltas. Este método envía
+  // availability=1 para RELEASE y availability=0 para RESERVATION/BLOCK.
+  // Esto es correcto para propiedades con 1 unidad por room_type (boutique hotels).
+  // Para propiedades con múltiples unidades, se necesitará pull-then-push (Sprint 8+).
+  //
+  // IMPORTANTE — Best-effort (CLAUDE.md §31):
+  //   La operación local ya fue commiteada antes de llamar aquí.
+  //   Si Channex falla, logueamos pero NO lanzamos excepción.
   async pushInventory(update: ChannexInventoryUpdate): Promise<void> {
     if (!this.enabled) return
+    // Skip silently if the property has no Channex ID configured (§31 fail-soft)
+    if (!update.channexPropertyId) return
 
-    // TODO(sprint8): implement. Retry queue on transient failures.
-    this.logger.warn(
-      `pushInventory queued (Sprint 8 pending): ${update.reason} trace=${update.traceId}`,
-    )
+    // Generar lista de fechas en el rango (dateFrom inclusive, dateTo inclusive)
+    const dates = generateDateRange(update.dateFrom, update.dateTo)
+    if (dates.length === 0) return
+
+    // Channex usa valores absolutos: RELEASE (+1 delta) → 1 disponible; todo lo demás → 0
+    const absoluteValue = update.delta > 0 ? 1 : 0
+
+    const values = dates.map((date) => ({
+      property_id:  update.channexPropertyId,
+      room_type_id: update.roomTypeId,
+      date,
+      availability: absoluteValue,
+    }))
+
+    try {
+      const res = await fetch(`${this.baseUrl}/availability`, {
+        method: 'POST',
+        headers: {
+          'user-api-key':  this.apiKey!,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({ values }),
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        // Log pero NO throw — la operación local ya está commiteada
+        this.logger.error(
+          `[Channex] pushInventory failed HTTP ${res.status} ` +
+          `reason=${update.reason} trace=${update.traceId}: ${text}`,
+        )
+        return
+      }
+
+      this.logger.log(
+        `[Channex] pushInventory OK reason=${update.reason} ` +
+        `dates=${dates.length} delta=${update.delta} trace=${update.traceId}`,
+      )
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // Best-effort: loguear y continuar (CLAUDE.md §31)
+      this.logger.error(
+        `[Channex] pushInventory network error reason=${update.reason} trace=${update.traceId}: ${msg}`,
+      )
+    }
   }
 
-  /**
-   * Push a stop-sell flag for a room_type on a date range.
-   * Use when the property decides to block selling (renovation, maintenance).
-   */
+  // ─── Push stop-sell ─────────────────────────────────────────────────────────
+  //
+  // Channex endpoint: POST /restrictions
+  // Usada cuando la propiedad bloquea venta (renovación, mantenimiento).
   async pushStopSell(params: {
+    channexPropertyId: string
     roomTypeId: string
     dateFrom: Date
     dateTo: Date
@@ -107,7 +199,57 @@ export class ChannexGateway {
     traceId: string
   }): Promise<void> {
     if (!this.enabled) return
-    // TODO(sprint8): POST /v1/restrictions { stop_sell: true/false }
-    this.logger.warn(`pushStopSell queued (Sprint 8 pending): trace=${params.traceId}`)
+
+    const dates = generateDateRange(toDateString(params.dateFrom), toDateString(params.dateTo))
+    if (dates.length === 0) return
+
+    const values = dates.map((date) => ({
+      property_id:  params.channexPropertyId,
+      room_type_id: params.roomTypeId,
+      date,
+      stop_sell:    params.stopSell,
+    }))
+
+    try {
+      const res = await fetch(`${this.baseUrl}/restrictions`, {
+        method: 'POST',
+        headers: {
+          'user-api-key': this.apiKey!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ values }),
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        this.logger.error(
+          `[Channex] pushStopSell failed HTTP ${res.status} trace=${params.traceId}: ${text}`,
+        )
+        return
+      }
+
+      this.logger.log(`[Channex] pushStopSell OK stopSell=${params.stopSell} trace=${params.traceId}`)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`[Channex] pushStopSell network error trace=${params.traceId}: ${msg}`)
+    }
   }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function toDateString(date: Date): string {
+  return date.toISOString().split('T')[0]
+}
+
+/** Genera todas las fechas entre from y to (ambas inclusive), formato YYYY-MM-DD. */
+function generateDateRange(from: string, to: string): string[] {
+  const dates: string[] = []
+  const current = new Date(`${from}T00:00:00Z`)
+  const end     = new Date(`${to}T00:00:00Z`)
+  while (current <= end) {
+    dates.push(toDateString(current))
+    current.setUTCDate(current.getUTCDate() + 1)
+  }
+  return dates
 }
