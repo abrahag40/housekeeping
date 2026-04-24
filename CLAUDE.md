@@ -1,20 +1,72 @@
-# CLAUDE.md — Housekeeping Management System
+# CLAUDE.md — Zenix PMS
 
 > Guía para retomar el proyecto desde cero. Lee esto antes de tocar código.
-> Última actualización: 2026-04-23 (Sprint 7B/7C scope; análisis no-show competitivo; bitácora de funcionalidades; estrategia de documentación y onboarding).
+> Última actualización: 2026-04-24 (Sprint 7B/7C scope; análisis no-show competitivo; bitácora de funcionalidades; estrategia de documentación y onboarding; arquitectura anti-overbooking; principios de diseño cognitivo).
+
+---
+
+## Principio Rector de Diseño — Obligatorio en Todo Código
+
+> **Este principio aplica a CADA decisión de UI, flujo, arquitectura de información, y experiencia de usuario. No es opcional.**
+
+Todo código, componente, flujo o pantalla que se escriba en Zenix debe estar cimentado en:
+
+**Estándares globales con base psicológica, comportamiento humano y neuromarketing**, con la finalidad de crear sistemas precisos, entendibles, transparentes, claros y fluidos.
+
+### Marco de referencia obligatorio
+
+**Psicología cognitiva y comportamiento humano:**
+- **Carga cognitiva (Sweller, 1988)** — minimizar la información simultánea en pantalla. El cerebro humano procesa 7±2 elementos en memoria de trabajo (Miller, 1956). Todo panel, modal o vista debe respetar este límite.
+- **Ley de Hick (1952)** — el tiempo de decisión aumenta logarítmicamente con el número de opciones. Reducir opciones visibles = reducir tiempo de reacción del operador.
+- **Ley de Fitts (1954)** — el tiempo para alcanzar un objetivo depende de su tamaño y distancia. Botones de acción frecuente deben ser grandes y cercanos al foco natural de atención.
+- **Efecto de posición serial (Ebbinghaus)** — los usuarios recuerdan mejor lo primero y lo último. La información más crítica va al inicio o al final, nunca al centro de una lista larga.
+- **Modelo de procesamiento dual (Kahneman, 2011)** — el Sistema 1 (rápido, automático) toma la mayoría de decisiones operativas. El diseño debe soportar operación por Sistema 1 en flujos rutinarios, y activar Sistema 2 (lento, deliberado) solo en decisiones de alto impacto (confirmaciones destructivas).
+
+**Estándares de usabilidad global:**
+- **Nielsen Norman Group — 10 Heurísticas de Usabilidad (1994, rev. 2020)** — visibilidad del estado del sistema, control del usuario, prevención de errores, reconocimiento sobre recuerdo.
+- **Apple Human Interface Guidelines (2024)** — feedback inmediato, acciones destructivas con confirmación, diseño para la 100ª sesión no la 1ª.
+- **ISO 9241-110:2020** — autodescripción, controlabilidad, conformidad con expectativas del usuario, tolerancia a errores.
+- **WCAG 2.1 AA** — contraste mínimo 4.5:1 para texto normal, 3:1 para UI components. `motion-reduce` en todas las animaciones.
+
+**Neuromarketing y percepción:**
+- **Psicología del color (Mehrabian-Russell, 1974; Cialdini, 1984)** — colores con semántica precisa: `emerald` = disponibilidad/acción positiva ("go"), `amber` = advertencia no-bloqueante (advisory), `red` = rechazo/escasez/urgencia. El recepcionista debe poder tomar decisiones solo por color, sin leer texto.
+- **Principio de proximidad (Gestalt)** — elementos relacionados visualmente cercanos. Acciones de una reserva agrupadas, no dispersas en la pantalla.
+- **Efecto de encuadre (Tversky & Kahneman, 1981)** — cómo se presenta la información determina la decisión. Un precio delta "€12 adicionales" se percibe diferente a "€12 de cargo extra". Los modales de confirmación usan lenguaje positivo-neutro, nunca alarmista innecesario.
+- **Flujo (Csikszentmihalyi, 1990)** — el operador en estado de flujo comete menos errores. Interfaces fluidas, predecibles y sin interrupciones innecesarias mantienen al usuario en estado de flujo.
+- **Principio de escasez visual** — los badges de urgencia (`🔴 Hoy entra`, `🔒 En uso`) usan rojo/amber porque el cerebro humano responde con atención prioritaria a estas señales de advertencia (evolución: señales de peligro = rojo/naranja).
+
+### Cómo aplicar este principio al escribir código
+
+Antes de implementar cualquier componente UI, responder:
+1. **¿Cuántos elementos simultáneos ve el usuario?** → Si son más de 5, agrupar o colapsar.
+2. **¿El color comunica el estado correctamente?** → Usar el sistema de color semántico de Zenix (emerald/amber/red), nunca colores arbitrarios.
+3. **¿El flujo requiere Sistema 1 o Sistema 2?** → Flujo rutinario = mínima fricción. Acción destructiva = confirmación explícita (forcing function).
+4. **¿El feedback es inmediato?** → Toda acción debe tener respuesta visual en ≤100ms (loading state, cambio de color, toast).
+5. **¿La animación tiene propósito?** → Usar `--ease-spring` (entrada) y `--ease-sharp-out` (salida). Nunca animar solo por estética.
+6. **¿El error es informativo?** → Nunca "Error genérico". Siempre: qué pasó + por qué + qué puede hacer el usuario.
 
 ---
 
 ## Project Overview
 
-Sistema de gestión de housekeeping para hostales/hoteles con dormitorios compartidos y habitaciones privadas. Reemplaza el proceso en papel: el recepcionista planifica las salidas del día, confirma cuando el huésped sale físicamente, y housekeeping recibe notificaciones push para limpiar.
+**Zenix es un PMS (Property Management System)** para hoteles boutique y hostales de LATAM con dormitorios compartidos y habitaciones privadas. El eje central del sistema es el **calendario de reservas**, que actúa como fuente de verdad de todos los datos de huéspedes, ocupación y operación.
+
+Del calendario se derivan todos los módulos del sistema:
+- **Housekeeping** — el calendario sabe qué habitaciones tienen checkout hoy y activa las tareas de limpieza correspondientes
+- **No-shows** — el calendario sabe qué huéspedes no llegaron y dispara el flujo fiscal de no-show
+- **Reportes** — el calendario es la fuente de verdad de ocupación, revenue y métricas operativas
+- **Mantenimiento** — el calendario sabe qué habitaciones están bloqueadas y por qué
+- **Disponibilidad** — toda verificación de inventario consulta el estado del calendario antes de confirmar cualquier reserva
+
+> **Nota histórica:** el proyecto comenzó explorando el módulo de housekeeping como prueba de concepto. Desde Sprint 6 el sistema es un PMS completo. El repositorio conserva el nombre `housekeeping3` por continuidad técnica, pero el producto es Zenix PMS.
 
 **Ventajas competitivas vs PMS del mercado (Mews, Opera Cloud, Cloudbeds, Clock PMS+):**
-- **Gestión per-bed** — tarea por cama, no por habitación. Solo Mews lo ofrece parcialmente.
-- **Checkout de 2 fases** — planificación AM + confirmación física. Ningún competidor lo tiene.
-- **Offline mobile con cola de sync** — ningún PMS soporta operación offline.
-- **SSE en tiempo real** — al nivel de los PMS premium (Mews, Opera, Clock PMS+).
+- **Calendario PMS con SSE en tiempo real** — al nivel de los PMS premium. El estado de cada habitación se actualiza en pantalla sin recargar.
+- **Gestión per-bed nativa** — tarea por cama, no por habitación. Solo Mews lo ofrece parcialmente. Construido desde el primer día para la realidad de los hostales.
+- **Checkout de 2 fases** — planificación AM + confirmación física. Ningún competidor lo tiene. Elimina el problema de housekeepers que limpian habitaciones con huéspedes adentro.
+- **App móvil offline con cola de sync** — ningún PMS entry-level soporta operación offline. Crítico para pisos sin señal wifi consistente.
 - **Auditoría fiscal-grade de no-shows** — trail inmutable, ventana de reversión de 48h, cargos traceables. Opera/Cloudbeds no tienen revert auditado; Mews tiene revert pero sin cumplimiento fiscal LATAM.
+- **Pre-arrival warming con WhatsApp automático** — detección temprana de no-shows a las 20:00 local con outreach automático. Ningún PMS del mercado lo tiene.
 - **Night audit multi-timezone** — scheduler per-propiedad usando IANA timezone. Un cliente con hoteles en México, Colombia y España recibe el corte en la hora local correcta de cada propiedad. Ningún PMS entry-level resuelve esto.
 
 ---
@@ -2458,3 +2510,105 @@ Antes de construir el onboarding (Sprint 10+), deben estar completos:
 6. 📋 Módulo de Mantenimiento MVP — pendiente
 
 El onboarding se construye cuando los flujos principales estén estables. Construirlo antes genera deuda de documentación (los tutoriales quedan desactualizados con cada cambio de UI).
+
+---
+
+## Arquitectura de Protección contra Overbooking
+
+> Referencia para el speech de ventas y para entender las capas de defensa del sistema.
+> El overbooking es el riesgo operativo más costoso de un PMS — una habitación vendida dos veces genera devoluciones, reubicaciones de emergencia y pérdida de reputación.
+
+### Las 3 capas de protección
+
+#### Capa 1 — Hard block transaccional ✅ Activo hoy
+
+Toda operación que crea o modifica una reserva (venga del recepcionista, de un webhook de OTA, o del night audit) pasa obligatoriamente por `checkAvailability` antes de escribir en base de datos.
+
+```
+¿Existe una estadía activa en roomId que se superponga con [from, to]
+y que NO sea un no-show (noShowAt: null)?
+  → Sí → 409 ConflictException — la operación se rechaza
+  → No → se confirma la reserva
+```
+
+**Quién gana:** el que confirma primero. PostgreSQL garantiza que dos transacciones simultáneas no pueden ambas pasar el check — una de ellas recibirá el conflicto. Esto aplica igualmente a reservas creadas por el recepcionista en Zenix y a webhooks de Channex (reservas de OTAs).
+
+**Consecuencia para el recepcionista:** recibe un mensaje de error con el nombre del huésped que ya ocupa la habitación y sus fechas. No hay overbooking silencioso.
+
+**Archivo clave:** `apps/api/src/pms/guest-stays/guest-stays.service.ts` → `checkAvailability()`
+
+#### Capa 2 — Channel Manager (Channex.io) ⚠️ Sprint 8C
+
+Esta capa cierra el gap de tiempo entre que Zenix confirma una reserva y que las OTAs actualizan su disponibilidad.
+
+```
+Recepcionista confirma reserva en Zenix
+        ↓
+checkAvailability pasa → reserva se guarda en BD
+        ↓
+AvailabilityService.notifyReservation() [fire-and-forget, fuera de tx]
+        ↓
+ChannexGateway.pushInventory(roomId, dates, allotment: 0)
+        ↓
+Channex.io actualiza Booking.com / Hostelworld / Airbnb en segundos
+        ↓
+La habitación desaparece de la disponibilidad en OTAs
+```
+
+Sin Sprint 8C, la Capa 1 sigue atrapando el segundo intento cuando el webhook de la OTA llega. Lo que cambia es **cuántos minutos la habitación aparece como disponible en OTAs antes del webhook**.
+
+**Política ante fallo de Channex:** fail-soft (best-effort). Si la red a Channex falla, la reserva local ya está commiteada — no se revierte. Se loguea para reintento manual. La Capa 1 sigue siendo la defensa final.
+
+**Archivo clave:** `apps/api/src/integrations/channex/channex.gateway.ts` (stub hoy)
+
+#### Capa 3 — SSE Soft-Lock intra-Zenix ✅ Activo (Sprint 7C)
+
+Protege únicamente el caso de dos recepcionistas del mismo hotel abriendo el mismo dialog simultáneamente. No tiene relación con OTAs.
+
+```
+Recepcionista A abre CheckInDialog para Hab. 205
+        ↓
+POST /v1/rooms/205/soft-lock/acquire → badge 🔒 "En uso por María G." para todos
+        ↓
+Recepcionista B ve el badge → espera o elige otra habitación
+        ↓
+Recepcionista A confirma → DELETE /v1/rooms/205/soft-lock → badge desaparece
+```
+
+**No es un hard block.** Si B ignora el badge e intenta confirmar, la Capa 1 lo rechazará. El soft-lock es UX, no seguridad.
+
+---
+
+### Escenario: recepcionista + Hostelworld simultáneos
+
+```
+T=0s   Recepcionista abre dialog → badge 🔒 (Capa 3, solo para otros Zenix users)
+T=0s   Huésped en Hostelworld ve habitación disponible
+
+--- Sin Sprint 8C activo ---
+T=30s  Recepcionista confirma → BD local OK → Channex no notificado
+T=60s  Huésped confirma en Hostelworld → webhook llega a Zenix
+T=60s  checkAvailability detecta conflicto → 409 → reserva Hostelworld rechazada ✅
+T=60s  Hostelworld marca la reserva como fallida → reintenta con otra hab. o notifica al huésped
+
+--- Con Sprint 8C activo ---
+T=30s  Recepcionista confirma → BD local OK → pushInventory a Channex (fire-and-forget)
+T=31s  Channex actualiza Hostelworld: allotment = 0
+T=32s  Habitación desaparece de Hostelworld
+T=60s  Huésped ya no puede confirmar — la habitación no aparece ✅
+```
+
+**Resultado en ambos casos:** no hay overbooking. La diferencia es la experiencia del huésped en Hostelworld (error post-confirmación vs. habitación que desaparece antes de que confirme).
+
+---
+
+### Para el speech de ventas
+
+**Hoy (pre-Sprint 8C):**
+> "Zenix tiene protección transaccional contra overbooking: toda reserva — venga del recepcionista o de una OTA — pasa por un hard check de disponibilidad antes de confirmarse. El primero que confirma gana. Si Booking.com intenta vender una habitación que ya confirmaste en Zenix, el sistema rechaza automáticamente la segunda reserva."
+
+**Post-Sprint 8C:**
+> "Zenix sincroniza el inventario en tiempo real con Channex.io, el mismo estándar de Opera Cloud y Mews. En cuanto confirmas una reserva, la disponibilidad se actualiza en todas tus OTAs — Booking.com, Hostelworld, Airbnb — en segundos. Dos capas de protección: sincronización preventiva en OTAs + hard block transaccional como defensa final."
+
+**Diferenciador de audit trail:**
+> "Si una OTA abre una disputa por una reserva rechazada, Zenix tiene el timestamp exacto de cuándo se confirmó la primera reserva, quién la creó, y el error 409 con causa específica. Ningún PMS entry-level tiene ese nivel de trazabilidad."

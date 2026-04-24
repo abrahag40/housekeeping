@@ -10,6 +10,7 @@ import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useSplitMi
 import { guestStaysApi } from '../../api/guest-stays.api'
 import { useStayJourneys } from '../../hooks/useStayJourneys'
 import { useRoomSSE } from '../../hooks/useRoomSSE'
+import { useSoftLockSSE } from '@/hooks/useSoftLock'
 import { useDateVirtualizer } from '../../hooks/useDateVirtualizer'
 import { TimelineTopBar } from './TimelineTopBar'
 import { TimelineSubBar } from './TimelineSubBar'
@@ -222,6 +223,12 @@ export function TimelineScheduler() {
 
   // SSE: real-time updates when room status changes
   useRoomSSE(PROPERTY_ID)
+
+  // Soft-lock state — Map<roomId, lockedByName> for 🔒 badge in RoomColumn.
+  // Populated via SSE events soft:lock:acquired / soft:lock:released.
+  // Using useState with functional setter avoids stale closures over the Map.
+  const [lockedRooms, setLockedRooms] = useState<Map<string, string>>(new Map())
+  useSoftLockSSE(setLockedRooms)
 
   // Room readiness tasks for visual indicators
   const { data: rawReadinessTasks = [] } = useRoomReadinessTasks(PROPERTY_ID)
@@ -651,6 +658,7 @@ export function TimelineScheduler() {
               groups={groups}
               onToggleGroup={toggleGroup}
               readinessTasks={readinessTasks}
+              lockedRooms={lockedRooms}
             />
           </div>
 
@@ -872,6 +880,7 @@ export function TimelineScheduler() {
         onRevertNoShow={(stayId) => {
           revertNoShowMut.mutate(stayId)
         }}
+        propertyId={PROPERTY_ID}
       />
 
       <CheckInDialog

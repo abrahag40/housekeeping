@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useSoftLock } from '@/hooks/useSoftLock'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
@@ -47,6 +48,8 @@ interface BookingDetailSheetProps {
   onMoveRoom: (stayId: string) => void
   onNoShow: (stayId: string, opts: { reason?: string; waiveCharge?: boolean }) => void
   onRevertNoShow: (stayId: string) => void
+  /** propertyId needed for soft-lock advisory (Sprint 7C). */
+  propertyId?: string
 }
 
 export function BookingDetailSheet({
@@ -57,7 +60,20 @@ export function BookingDetailSheet({
   onMoveRoom,
   onNoShow,
   onRevertNoShow,
+  propertyId,
 }: BookingDetailSheetProps) {
+  /**
+   * Advisory soft-lock while the panel is open.
+   * Rationale (CLAUDE.md §Principio Rector):
+   * - Visibilidad del sistema (Nielsen #1): cualquier recepcionista conectado
+   *   verá el badge 🔒 en la columna de habitaciones mientras este panel esté
+   *   abierto, independientemente de si está en CheckInDialog o en este panel.
+   * - Modelo dual (Kahneman): el badge activa Sistema 1 — reconocimiento
+   *   inmediato sin carga cognitiva adicional para quien lo recibe.
+   * - Lock se libera en el cleanup del useEffect (unmount o `open` → false),
+   *   garantizando que el badge desaparezca al cerrar el panel.
+   */
+  useSoftLock(open && stay?.roomId ? stay.roomId : null, propertyId ?? null)
   const navigate = useNavigate()
   const [showNoShowConfirm, setShowNoShowConfirm] = useState(false)
   const [noShowReason, setNoShowReason] = useState('')
