@@ -279,6 +279,25 @@ export function useExtendSameRoom(propertyId: string) {
   })
 }
 
+/** Extension into a different room when the original is unavailable for the new dates.
+ *  Creates EXTENSION_NEW_ROOM segment + room-change cleaning tasks. */
+export function useExtendNewRoom(propertyId: string) {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ journeyId, newRoomId, newCheckOut }: { journeyId: string; newRoomId: string; newCheckOut: Date }) =>
+      guestStaysApi.extendNewRoom(journeyId, newRoomId, newCheckOut),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      qc.invalidateQueries({ queryKey: ['stay-journeys-timeline', propertyId], exact: false, refetchType: 'active' })
+      toast.success('Estadía extendida en otra habitación')
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo extender en otra habitación')
+    },
+  })
+}
+
 /** Mid-stay room move for IN_HOUSE guests. Routes to stay-journeys endpoint which
  *  creates a ROOM_MOVE segment preserving the StayJourney audit trail. */
 export function useSplitMidStay(propertyId: string) {

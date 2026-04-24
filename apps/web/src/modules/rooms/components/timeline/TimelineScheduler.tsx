@@ -6,7 +6,8 @@ import { useTimelineStore } from '../../stores/timeline.store'
 import { TIMELINE } from '../../utils/timeline.constants'
 import { getStayStatus } from '../../utils/timeline.utils'
 import { useDragDrop } from '../../hooks/useDragDrop'
-import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useSplitMidStay, useSplitReservation, useMarkNoShow, useRevertNoShow, useRoomReadinessTasks, useExtendStay, useExtendSameRoom, useMoveExtensionRoom } from '../../hooks/useGuestStays'
+import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useSplitMidStay, useSplitReservation, useMarkNoShow, useRevertNoShow, useRoomReadinessTasks, useExtendStay, useExtendSameRoom, useExtendNewRoom, useMoveExtensionRoom } from '../../hooks/useGuestStays'
+import { guestStaysApi } from '../../api/guest-stays.api'
 import { useStayJourneys } from '../../hooks/useStayJourneys'
 import { useRoomSSE } from '../../hooks/useRoomSSE'
 import { useDateVirtualizer } from '../../hooks/useDateVirtualizer'
@@ -195,8 +196,9 @@ export function TimelineScheduler() {
   const moveRoomMut     = useMoveRoom(PROPERTY_ID)
   const splitMidStayMut = useSplitMidStay(PROPERTY_ID)
   const splitReservationMut = useSplitReservation(PROPERTY_ID)
-  const extendStayMut     = useExtendStay(PROPERTY_ID)
+  const extendStayMut        = useExtendStay(PROPERTY_ID)
   const extendSameRoomMut    = useExtendSameRoom(PROPERTY_ID)
+  const extendNewRoomMut     = useExtendNewRoom(PROPERTY_ID)
   const moveExtensionRoomMut = useMoveExtensionRoom(PROPERTY_ID)
   const markNoShowMut   = useMarkNoShow(PROPERTY_ID)
   const revertNoShowMut = useRevertNoShow(PROPERTY_ID)
@@ -332,6 +334,8 @@ export function TimelineScheduler() {
     journeyId?: string
     originalCheckOut: Date
     newCheckOut: Date
+    roomConflict?: boolean
+    availableRooms?: import('../dialogs/ExtendConfirmDialog').RoomOption[]
   } | null>(null)
 
   // ─── Move room dialog ──────────────────────────────────────────
@@ -521,12 +525,46 @@ export function TimelineScheduler() {
         if (!prev) return null
         const added = differenceInCalendarDays(prev.previewCheckOut, prev.originalCheckOut)
         if (added >= 1) {
-          setExtendConfirm({
-            stayId: prev.stayId,
-            journeyId: prev.journeyId,
-            originalCheckOut: prev.originalCheckOut,
-            newCheckOut: prev.previewCheckOut,
-          })
+          const snap = { ...prev }
+          // Pre-flight: check if the original room is available for the extension dates.
+          // If the room has a conflict, offer alternative rooms with availability.
+          guestStaysApi.checkAvailability(snap.roomId, snap.originalCheckOut, snap.previewCheckOut)
+            .then((result) => {
+              if (result.available) {
+                setExtendConfirm({
+                  stayId: snap.stayId,
+                  journeyId: snap.journeyId,
+                  originalCheckOut: snap.originalCheckOut,
+                  newCheckOut: snap.previewCheckOut,
+                })
+              } else {
+                // Room unavailable — collect alternatives from flatRows and filter
+                // by same roomTypeId, excluding the conflicting room itself.
+                const conflictingRoomRow = flatRows.find(r => r.type === 'room' && r.id === snap.roomId)
+                const roomTypeId = conflictingRoomRow?.room?.roomTypeId
+                const alternatives = flatRows
+                  .filter(r => r.type === 'room' && r.id !== snap.roomId && (!roomTypeId || r.room?.roomTypeId === roomTypeId))
+                  .map(r => ({ id: r.id, number: r.room?.number ?? r.id, type: r.room?.roomTypeId ?? '' }))
+
+                setExtendConfirm({
+                  stayId: snap.stayId,
+                  journeyId: snap.journeyId,
+                  originalCheckOut: snap.originalCheckOut,
+                  newCheckOut: snap.previewCheckOut,
+                  roomConflict: true,
+                  availableRooms: alternatives,
+                })
+              }
+            })
+            .catch(() => {
+              // On network error, fall back to same-room extension and let the server validate.
+              setExtendConfirm({
+                stayId: snap.stayId,
+                journeyId: snap.journeyId,
+                originalCheckOut: snap.originalCheckOut,
+                newCheckOut: snap.previewCheckOut,
+              })
+            })
         }
         return null
       })
@@ -841,6 +879,7 @@ export function TimelineScheduler() {
         initialRoomId={checkInDialog.roomId}
         roomNumber={checkInDialog.roomNumber}
         initialCheckIn={checkInDialog.checkIn}
+        propertyId={PROPERTY_ID}
         onClose={() => setCheckInDialog({ open: false })}
         onConfirm={(data: NewStayData) => {
           createStay.mutate({ ...data, propertyId: PROPERTY_ID })
@@ -881,8 +920,17 @@ export function TimelineScheduler() {
             currency={stay.currency}
             source={stay.source}
             otaName={stay.otaName}
-            isPending={extendStayMut.isPending || extendSameRoomMut.isPending}
+            roomConflict={extendConfirm.roomConflict}
+            availableRooms={extendConfirm.availableRooms}
+            isPending={extendStayMut.isPending || extendSameRoomMut.isPending || extendNewRoomMut.isPending}
             onClose={() => setExtendConfirm(null)}
+            onConfirmNewRoom={(newRoomId) => {
+              if (!extendConfirm.journeyId) return
+              extendNewRoomMut.mutate(
+                { journeyId: extendConfirm.journeyId, newRoomId, newCheckOut: extendConfirm.newCheckOut },
+                { onSettled: () => setExtendConfirm(null) },
+              )
+            }}
             onConfirm={() => {
               if (extendConfirm.journeyId) {
                 // Journey-aware path: creates EXTENSION_SAME_ROOM segment → +ext block appears

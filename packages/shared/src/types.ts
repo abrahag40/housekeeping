@@ -335,6 +335,9 @@ export type SseEventType =
   | 'stay:no_show_reverted'
   // Pre-arrival warning (potential no-show)
   | 'arrival:at_risk'
+  // Soft-lock advisory (intra-Zenix overbooking UX — no hard block)
+  | 'soft:lock:acquired'
+  | 'soft:lock:released'
 
 // ─── Offline Sync (Mobile) ────────────────────────────────────────────────────
 

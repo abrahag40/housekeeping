@@ -55,4 +55,20 @@ export class PmsSseListener {
       toRoomId: payload.toRoomId,
     })
   }
+
+  @OnEvent('soft-lock.acquired')
+  onSoftLockAcquired(payload: { roomId: string; userName: string; propertyId: string }) {
+    this.notifications.emit(payload.propertyId, 'soft:lock:acquired', {
+      roomId: payload.roomId,
+      lockedByName: payload.userName,
+      expiresAt: new Date(Date.now() + 90_000).toISOString(),
+    })
+  }
+
+  @OnEvent('soft-lock.released')
+  onSoftLockReleased(payload: { roomId: string; propertyId: string }) {
+    this.notifications.emit(payload.propertyId, 'soft:lock:released', {
+      roomId: payload.roomId,
+    })
+  }
 }
