@@ -56,6 +56,25 @@ export class PmsSseListener {
     })
   }
 
+  @OnEvent('checkout.early')
+  onEarlyCheckout(payload: {
+    roomId: string
+    propertyId: string
+    stayId: string
+    guestName?: string
+    freedFrom: string
+    freedTo: string
+  }) {
+    this.notifications.emit(payload.propertyId, 'checkout:early', {
+      roomId: payload.roomId,
+      stayId: payload.stayId,
+      guestName: payload.guestName,
+      freedFrom: payload.freedFrom,
+      freedTo: payload.freedTo,
+      newStatus: 'CHECKING_OUT',
+    })
+  }
+
   @OnEvent('soft-lock.acquired')
   onSoftLockAcquired(payload: { roomId: string; userName: string; propertyId: string }) {
     this.notifications.emit(payload.propertyId, 'soft:lock:acquired', {

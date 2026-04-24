@@ -330,6 +330,8 @@ export type SseEventType =
   | 'block:expired'
   | 'block:cancelled'
   | 'block:extended'
+  // Checkout events
+  | 'checkout:early'
   // No-show events
   | 'stay:no_show'
   | 'stay:no_show_reverted'
@@ -338,6 +340,8 @@ export type SseEventType =
   // Soft-lock advisory (intra-Zenix overbooking UX — no hard block)
   | 'soft:lock:acquired'
   | 'soft:lock:released'
+  // Notification center — real-time bell push
+  | 'notification:new'
 
 // ─── Offline Sync (Mobile) ────────────────────────────────────────────────────
 

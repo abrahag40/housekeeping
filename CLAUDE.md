@@ -1,7 +1,7 @@
 # CLAUDE.md — Zenix PMS
 
 > Guía para retomar el proyecto desde cero. Lee esto antes de tocar código.
-> Última actualización: 2026-04-24 (Sprint 7B ✅ + 7C ✅ completos; análisis no-show competitivo; bitácora de funcionalidades; estrategia de documentación y onboarding; arquitectura anti-overbooking; principios de diseño cognitivo).
+> Última actualización: 2026-04-24 (Sprint 7B ✅ + 7C ✅ completos; Notification Center ✅ completo; Salida Anticipada ✅; análisis no-show competitivo; bitácora de funcionalidades; estrategia de documentación y onboarding; arquitectura anti-overbooking; principios de diseño cognitivo).
 
 ---
 
@@ -1774,11 +1774,99 @@ npx prisma studio
 | Night audit multi-timezone | ✅ Completo | `night-audit.scheduler.ts` |
 | Extender en otra habitación (paso 2) | ✅ Sprint 7B | `ExtendConfirmDialog.tsx`, `useGuestStays.ts` |
 | SSE Soft-Lock (advisory, 90s TTL) | ✅ Sprint 7C | `useSoftLock.ts`, `RoomColumn.tsx`, `BookingDetailSheet.tsx` |
+| Salida anticipada (early checkout) | ✅ Sprint 7D | `BookingDetailSheet.tsx`, `guest-stays.service.ts` |
+| Notification Center (bell panel) | ✅ Sprint 7D | `NotificationPanel.tsx`, `useNotifications.ts`, `notification-center.*` |
 | OccupancyFooter color por ocupación | ⏳ Sprint 7A pendiente | `TimelineGrid.tsx` |
 | Stayover tasks automáticas | ⏳ P1 Roadmap | `StayoverService` |
 | KanbanPage (supervisor board) | ⚠️ Esqueleto | `KanbanPage.tsx` |
 | Connected Rooms | 🚫 Descartado | — |
 | Day-Use / por horas | 📋 Módulo DayUse — Etapa 3 | — |
+
+---
+
+## Sprint 7D — Notification Center + Salida Anticipada
+
+### Notification Center (`NotificationCenterModule`)
+
+**Responsabilidad:** Módulo de infraestructura independiente que cualquier dominio puede usar para crear notificaciones en tiempo real con audit trail completo.
+
+**Independencia:** No importa ningún módulo de dominio (ni `GuestStays`, ni `Checkouts`, ni `SmartBlock`). Solo depende de `PrismaService`, `TenantContextService` y `NotificationsModule` (SSE). Esto permite que cualquier módulo futuro lo inyecte sin riesgo de dependencias circulares.
+
+**Principio de diseño (Kahneman Sistema 2):** Solo `ACTION_REQUIRED` y `APPROVAL_REQUIRED` activan un segundo paso explícito en la UI. `INFORMATIONAL` se descarta con un tap. Carga cognitiva mínima: 3 categorías visuales (URGENTE / acción / informativo), el recepcionista procesa por color + ícono, no leyendo texto.
+
+**Schema (3 modelos Prisma):**
+- `AppNotification` — registro principal con 10 categorías, 4 prioridades, 3 tipos de recipient
+- `AppNotificationRead` — quién leyó, cuándo (unique per notif+reader)
+- `AppNotificationApproval` — quién aprobó/rechazó, cuándo, razón
+
+**Archivos clave:**
+```
+apps/api/src/notification-center/
+├── notification-center.module.ts      Exports NotificationCenterService
+├── notification-center.service.ts     send(), listForUser(), markRead(), markAllRead(), approve(), reject(), unreadCount()
+└── notification-center.controller.ts  7 endpoints bajo /v1/notification-center
+
+apps/web/src/
+├── api/notifications.api.ts           API client tipado
+├── hooks/useNotifications.ts          React Query + mutations
+└── components/NotificationPanel.tsx   Panel deslizante del bell icon
+```
+
+**Flujo SSE:** al llamar `send()`, el servicio crea el registro en BD y emite `notification:new` via el SSE existente de la propiedad. El frontend con `useSSE` invalida el query y el badge se actualiza en tiempo real.
+
+**Categorías disponibles:**
+`CHECKIN_UNCONFIRMED` | `EARLY_CHECKOUT` | `NO_SHOW` | `NO_SHOW_REVERTED` | `ARRIVAL_RISK` | `CHECKOUT_COMPLETE` | `TASK_COMPLETED` | `MAINTENANCE_REPORTED` | `PAYMENT_PENDING` | `SYSTEM`
+
+**Cómo usar desde cualquier servicio de dominio:**
+```typescript
+// Inyectar en constructor:
+constructor(private readonly notifCenter: NotificationCenterService) {}
+
+// Enviar notificación:
+void this.notifCenter.send({
+  propertyId: stay.propertyId,
+  type:        'ACTION_REQUIRED',
+  category:    'EARLY_CHECKOUT',
+  priority:    'HIGH',
+  title:       `Salida anticipada — ${guestName}`,
+  body:        `La habitación ${roomNumber} quedó libre antes de lo previsto.`,
+  recipientType: 'ROLE',
+  recipientRole: HousekeepingRole.SUPERVISOR,
+  triggeredById: actorId,
+  actionUrl:   `/reservations/${stayId}`,
+}).catch((e) => this.logger.warn(`notif send failed: ${e.message}`))
+```
+
+### Salida Anticipada (Early Checkout)
+
+**Qué hace:** El recepcionista puede cerrar una estadía activa antes de su fecha programada. Útil cuando el huésped decide irse antes sin haber planificado un checkout de housekeeping.
+
+**Flujo:**
+1. Botón "Salida anticipada" visible en `BookingDetailSheet` solo cuando `status === 'IN_HOUSE' && !isArrivalDay`
+2. `EarlyCheckoutDialog` confirma con fecha real de salida
+3. `POST /v1/guest-stays/:id/early-checkout` → `earlyCheckout()` en `GuestStaysService`
+4. Servidor: cierra el último `StaySegment` activo (`checkOut = now, status = COMPLETED`), libera unidades, registra `JourneyEvent(CHECKED_OUT)`, emite SSE `checkout:early`, notifica a housekeeping vía `NotificationCenterService`
+
+**Lógica `isArrivalDay`:**
+```typescript
+const isArrivalDay = startOfDay(new Date(stay.checkIn)).getTime() === startOfDay(new Date()).getTime()
+const canNoShow        = !isNoShow && status === 'IN_HOUSE' && isArrivalDay
+const canEarlyCheckout = !isNoShow && status === 'IN_HOUSE' && !isArrivalDay
+```
+
+**Por qué son mutuamente excluyentes:** No-show aplica cuando el huésped nunca llegó (lógicamente el día de entrada). Early checkout aplica cuando el huésped ya está adentro y decide salir antes. El sistema usa `isArrivalDay` como heurística hasta que se implemente `actualCheckin` en Sprint 8E.
+
+### Decisión pendiente: `actualCheckin` (Sprint 8E)
+
+**Problema arquitectónico detectado:** El status `IN_HOUSE` se deriva solo de fechas (`checkIn ≤ hoy < checkOut`). El sistema asume que si hoy es día de llegada, el huésped llegó — pero esto no es confirmado por ningún actor.
+
+**Propuesta documentada para Sprint 8E:**
+- Agregar `GuestStay.actualCheckin DateTime?` y `checkinConfirmedById String?` al schema
+- Nuevo status derivado `UNCONFIRMED` para el día de llegada antes de confirmación
+- Botón "Confirmar llegada" en `BookingDetailSheet` visible solo en status `UNCONFIRMED`
+- Notificación `CHECKIN_UNCONFIRMED` generada por el night audit cuando `checkinAt <= now` y `actualCheckin == null`
+- Solo después de `actualCheckin != null` el status pasa a `IN_HOUSE` real
+- Esto elimina la ambigüedad `IN_HOUSE` vs `NO_SHOW` para el día de llegada
 
 ---
 
@@ -2310,6 +2398,7 @@ export function useSoftLock(roomId: string | null) {
 | PMS-05 | Extensión con pricing aditivo (no recalculativo) | ✅ | Sprint 7A | Recepcionista | §22 decisión de diseño |
 | PMS-06 | Extensión en otra habitación (con auto-detect de conflicto) | ✅ | Sprint 7B | Recepcionista | Pre-flight check + selector de alternativas del mismo tipo |
 | PMS-07 | SSE Soft-Lock advisory (badge "en uso") | ✅ | Sprint 7C | Recepcionista | Badge 🔒 en RoomColumn; lock en CheckInDialog + BookingDetailSheet |
+| PMS-21 | Salida anticipada (early checkout manual) | ✅ | Sprint 7D | Recepcionista | `BookingDetailSheet.tsx`, `EarlyCheckoutDialog`, `POST /early-checkout` |
 | PMS-08 | Tooltip de reserva (flip top/bottom) | ✅ | Sprint 6 | Recepcionista | `TooltipPortal.tsx` |
 | PMS-09 | Panel de detalle de reserva 420px | ✅ | Sprint 6 | Recepcionista | `BookingDetailSheet.tsx` |
 | PMS-10 | Página de detalle completo de reserva | ✅ | Sprint 6 | Recepcionista | `ReservationDetailPage.tsx` |
@@ -2363,6 +2452,24 @@ export function useSoftLock(roomId: string | null) {
 | CI-08 | Override manual de precio con razón auditada | ⏳ | Sprint 8 | Supervisor | `rateOverride` field |
 | CI-09 | Preferencias de limpieza del huésped (opt-in) | 📋 | Roadmap P6 | Huésped/Recepcionista | QR + web form |
 | CI-10 | Gestión de pagos (depósitos, abonos, saldo) | 📋 | Sprint 8 | Recepcionista | `paymentStatus` + tab Pago |
+| CI-11 | Confirmación manual de llegada (`actualCheckin`) | ⏳ | Sprint 8E | Recepcionista | Status UNCONFIRMED → IN_HOUSE; elimina heurística isArrivalDay |
+
+---
+
+### Módulo: Notification Center
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| NC-01 | Panel de notificaciones (bell icon → slide-in) | ✅ | Sprint 7D | Todos | `NotificationPanel.tsx` — 3 secciones: urgente/acción/info |
+| NC-02 | Badge de no leídas en tiempo real (SSE) | ✅ | Sprint 7D | Todos | `notification:new` via SSE + React Query |
+| NC-03 | Marcar como leída (por notificación y todas) | ✅ | Sprint 7D | Todos | `markRead`, `markAllRead` con optimistic UI |
+| NC-04 | Notificaciones de aprobación inline (aprobar/rechazar) | ✅ | Sprint 7D | Supervisor | `APPROVAL_REQUIRED` con botones in-card |
+| NC-05 | Audit trail completo (quién leyó, quién aprobó, cuándo) | ✅ | Sprint 7D | Sistema | `AppNotificationRead`, `AppNotificationApproval` Prisma |
+| NC-06 | Auto-notificación en early checkout | ✅ | Sprint 7D | Sistema | `NotificationCenterService.send()` en `GuestStaysService` |
+| NC-07 | Auto-notificación en no-show | ✅ | Sprint 7D | Sistema | Notif. `ACTION_REQUIRED` al supervisor si hay cargo pendiente |
+| NC-08 | Endpoint de audit log | ✅ | Sprint 7D | Admin | `GET /v1/notification-center/audit` con rango de fechas |
+| NC-09 | Expiración automática de notificaciones | ✅ | Sprint 7D | Sistema | Campo `expiresAt` — excluidas del list después de vencidas |
+| NC-10 | Filtro de recipient (USER / ROLE / PROPERTY_ALL) | ✅ | Sprint 7D | Sistema | Cada notif. va al usuario correcto, no a todos |
 
 ---
 

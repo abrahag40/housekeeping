@@ -180,6 +180,30 @@ export function useCheckout(propertyId: string) {
       })
       qc.invalidateQueries({ queryKey: ['rooms', propertyId], exact: false })
     },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo realizar el checkout')
+    },
+  })
+}
+
+export function useEarlyCheckout(propertyId: string) {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ stayId, notes }: { stayId: string; notes?: string }) =>
+      guestStaysApi.earlyCheckout(stayId, notes),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      qc.invalidateQueries({ queryKey: ['rooms', propertyId], exact: false })
+      const msg =
+        result.tasksScheduledFor === 'tomorrow'
+          ? 'Salida anticipada registrada — limpieza programada para mañana'
+          : 'Salida anticipada registrada — limpieza disponible para hoy'
+      toast.success(msg)
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo registrar la salida anticipada')
+    },
   })
 }
 

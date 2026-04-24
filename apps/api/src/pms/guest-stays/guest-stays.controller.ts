@@ -92,6 +92,15 @@ export class GuestStaysController {
     return this.service.checkout(id, actor.sub)
   }
 
+  @Post(':id/early-checkout')
+  earlyCheckout(
+    @Param('id') id: string,
+    @Body() dto: { notes?: string },
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.earlyCheckout(id, actor.sub, dto.notes)
+  }
+
   @Patch(':id/extend')
   extendStay(
     @Param('id') id: string,

@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { format, differenceInDays, differenceInHours } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
@@ -32,6 +33,8 @@ import {
 import { getStayStatus } from '../modules/rooms/utils/timeline.utils'
 import { PaymentStatusBadge } from '../modules/rooms/components/shared/PaymentStatusBadge'
 import { OTA_OPTIONS } from '../modules/rooms/components/dialogs/CheckInDialog'
+import { EarlyCheckoutDialog } from '../modules/rooms/components/dialogs/EarlyCheckoutDialog'
+import { useCheckout, useRevertNoShow, useEarlyCheckout } from '../modules/rooms/hooks/useGuestStays'
 import type { GuestStayDto } from '@zenix/shared'
 import type { PaymentStatus } from '../modules/rooms/types/timeline.types'
 
@@ -84,12 +87,19 @@ function SectionCard({ children, className }: { children: React.ReactNode; class
 export function ReservationDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const qc = useQueryClient()
+  const [showCheckoutConfirm, setShowCheckoutConfirm] = useState(false)
+  const [showEarlyCheckout, setShowEarlyCheckout] = useState(false)
 
   const { data, isLoading, isError } = useQuery<GuestStayDto>({
     queryKey: ['guest-stay', id],
     queryFn: () => guestStaysApi.get(id!) as unknown as Promise<GuestStayDto>,
     enabled: !!id,
   })
+
+  const checkoutMutation  = useCheckout(data?.propertyId ?? '')
+  const revertMutation    = useRevertNoShow(data?.propertyId ?? '')
+  const earlyCheckoutMut  = useEarlyCheckout(data?.propertyId ?? '')
 
   if (isLoading) {
     return (
@@ -195,25 +205,70 @@ export function ReservationDetailPage() {
                   variant="outline"
                   size="sm"
                   className="text-xs border-amber-200 text-amber-700 hover:bg-amber-50"
-                  onClick={() => navigate('/pms')}
+                  disabled={revertMutation.isPending}
+                  onClick={() =>
+                    revertMutation.mutate(id!, {
+                      onSuccess: () =>
+                        qc.invalidateQueries({ queryKey: ['guest-stay', id] }),
+                    })
+                  }
                 >
                   <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                  Revertir no-show
+                  {revertMutation.isPending ? 'Revirtiendo…' : 'Revertir no-show'}
                 </Button>
               )}
-              {!isNoShow && (status === 'IN_HOUSE' || status === 'DEPARTING') && (
+
+              {/* DEPARTING: checkout en fecha programada con confirmación inline */}
+              {!isNoShow && status === 'DEPARTING' && (
+                showCheckoutConfirm ? (
+                  <div className="flex gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs"
+                      onClick={() => setShowCheckoutConfirm(false)}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="text-xs text-white bg-amber-600 hover:bg-amber-700"
+                      disabled={checkoutMutation.isPending}
+                      onClick={() =>
+                        checkoutMutation.mutate(id!, {
+                          onSuccess: () => {
+                            setShowCheckoutConfirm(false)
+                            qc.invalidateQueries({ queryKey: ['guest-stay', id] })
+                          },
+                        })
+                      }
+                    >
+                      <LogOut className="h-3.5 w-3.5 mr-1.5" />
+                      {checkoutMutation.isPending ? 'Procesando…' : 'Confirmar checkout'}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="text-xs text-white bg-amber-600 hover:bg-amber-700"
+                    onClick={() => setShowCheckoutConfirm(true)}
+                  >
+                    <LogOut className="h-3.5 w-3.5 mr-1.5" />
+                    Checkout
+                  </Button>
+                )
+              )}
+
+              {/* IN_HOUSE: salida anticipada (antes de la fecha programada) */}
+              {!isNoShow && status === 'IN_HOUSE' && (
                 <Button
                   size="sm"
-                  className={cn(
-                    'text-xs text-white',
-                    status === 'DEPARTING'
-                      ? 'bg-amber-600 hover:bg-amber-700'
-                      : 'bg-slate-800 hover:bg-slate-700',
-                  )}
-                  onClick={() => navigate('/pms')}
+                  variant="outline"
+                  className="text-xs border-amber-200 text-amber-700 hover:bg-amber-50"
+                  onClick={() => setShowEarlyCheckout(true)}
                 >
                   <LogOut className="h-3.5 w-3.5 mr-1.5" />
-                  {status === 'DEPARTING' ? 'Confirmar checkout' : 'Checkout'}
+                  Salida anticipada
                 </Button>
               )}
             </div>
@@ -457,6 +512,29 @@ export function ReservationDetailPage() {
           </p>
         </TabsContent>
       </Tabs>
+
+      {data && (status === 'IN_HOUSE') && (
+        <EarlyCheckoutDialog
+          open={showEarlyCheckout}
+          onClose={() => setShowEarlyCheckout(false)}
+          onConfirm={(notes) => {
+            earlyCheckoutMut.mutate(
+              { stayId: id!, notes },
+              {
+                onSuccess: () => {
+                  setShowEarlyCheckout(false)
+                  qc.invalidateQueries({ queryKey: ['guest-stay', id] })
+                },
+              },
+            )
+          }}
+          isPending={earlyCheckoutMut.isPending}
+          guestName={data.guestName}
+          roomLabel={data.room?.number ? `Hab. ${data.room.number}` : 'Habitación'}
+          checkinAt={new Date(data.checkinAt)}
+          scheduledCheckout={new Date(data.scheduledCheckout)}
+        />
+      )}
     </div>
   )
 }

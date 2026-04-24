@@ -46,6 +46,12 @@ export const guestStaysApi = {
   checkout: (stayId: string) =>
     api.post(`${BASE}/${stayId}/checkout`, {}),
 
+  earlyCheckout: (stayId: string, notes?: string) =>
+    api.post<{ success: boolean; freedFrom: string; freedTo: string; tasksScheduledFor: 'today' | 'tomorrow' }>(
+      `${BASE}/${stayId}/early-checkout`,
+      { notes },
+    ),
+
   moveRoom: (stayId: string, newRoomId: string, pricingDecision: string) =>
     api.patch(`${BASE}/${stayId}/move-room`, { newRoomId, pricingDecision }),
 

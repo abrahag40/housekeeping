@@ -7,9 +7,10 @@ import { TenantContextService } from '../../common/tenant-context.service'
 import { StayJourneysModule } from '../stay-journeys/stay-journeys.module'
 import { NotificationsModule } from '../../notifications/notifications.module'
 import { ChannexModule } from '../../integrations/channex/channex.module'
+import { NotificationCenterModule } from '../../notification-center/notification-center.module'
 
 @Module({
-  imports: [StayJourneysModule, NotificationsModule, ChannexModule],
+  imports: [StayJourneysModule, NotificationsModule, ChannexModule, NotificationCenterModule],
   controllers: [GuestStaysController],
   providers: [GuestStaysService, NightAuditScheduler, PotentialNoShowScheduler, TenantContextService],
   exports: [GuestStaysService],

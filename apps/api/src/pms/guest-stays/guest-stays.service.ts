@@ -16,6 +16,7 @@ import type { AvailabilityConflict, RoomAvailabilityResult } from '@zenix/shared
 import { Prisma } from '@prisma/client'
 import { StayJourneyService } from '../stay-journeys/stay-journeys.service'
 import { ChannexGateway } from '../../integrations/channex/channex.gateway'
+import { NotificationCenterService } from '../../notification-center/notification-center.service'
 
 /** Returns the local date string (YYYY-MM-DD) for a given UTC date in the specified IANA timezone. */
 function toLocalDate(date: Date, timezone: string): string {
@@ -49,6 +50,7 @@ export class GuestStaysService {
     private readonly email: EmailService,
     private readonly journeyService: StayJourneyService,
     private readonly channex: ChannexGateway,
+    private readonly notifCenter: NotificationCenterService,
   ) {}
 
   async create(dto: CreateGuestStayDto, actorId: string) {
@@ -350,6 +352,234 @@ export class GuestStaysService {
     return updated
   }
 
+  /**
+   * POST /v1/guest-stays/:id/early-checkout
+   *
+   * El huésped sale antes de la fecha de checkout programada.
+   *
+   * Diferencias vs checkout regular:
+   *  - GuestStay.actualCheckout = ahora (no scheduledCheckout)
+   *  - paymentStatus permanece PENDING — puede haber reembolso parcial (Sprint 8)
+   *  - Se crea Checkout + CleaningTask(PENDING) para las unidades de la habitación
+   *  - Si localHour < HOUSEKEEPING_END_HOUR (20): tarea muestra en el grid de HOY
+   *  - Si localHour >= HOUSEKEEPING_END_HOUR (20): tarea muestra en el grid de MAÑANA
+   *    (usando checkout.actualCheckoutAt con fecha de mañana)
+   *  - Las noches liberadas se notifican a Channex (best-effort, fire-and-forget)
+   *  - Emite SSE checkout:early para actualizar el calendario en tiempo real
+   *
+   * TODO(sprint9-marketing): enviar mensaje WhatsApp/email "early checkout" al huésped
+   */
+  async earlyCheckout(stayId: string, actorId: string, notes?: string) {
+    const orgId = this.tenant.getOrganizationId()
+
+    // Constante de corte de turno de housekeeping (hora local).
+    // Si el early checkout ocurre ANTES de esta hora, la tarea aparece en el grid de hoy.
+    // Si ocurre DESPUÉS, la tarea queda para el grid de mañana.
+    // TODO(cfg): hacer configurable via PropertySettings.housekeepingEndHour
+    const HOUSEKEEPING_END_HOUR = 20
+
+    const stay = await this.prisma.guestStay.findUnique({
+      where: { id: stayId, organizationId: orgId },
+      include: {
+        room: {
+          select: {
+            id: true,
+            number: true,
+            channexRoomTypeId: true,
+            units: { select: { id: true } },
+            property: { select: { id: true, settings: true } },
+          },
+        },
+        stayJourney: {
+          select: {
+            id: true,
+            segments: {
+              where: { status: { in: ['ACTIVE', 'PENDING'] } },
+              orderBy: { checkIn: 'asc' },
+            },
+          },
+        },
+      },
+    })
+
+    if (!stay) throw new NotFoundException()
+    if (stay.actualCheckout) {
+      throw new BadRequestException('El huésped ya realizó checkout')
+    }
+    if (stay.noShowAt) {
+      throw new BadRequestException('No se puede realizar checkout de un no-show')
+    }
+
+    const now = new Date()
+    if (now >= stay.scheduledCheckout) {
+      throw new BadRequestException(
+        'La fecha de checkout ya pasó — usa el checkout regular',
+      )
+    }
+
+    const tz = stay.room.property.settings?.timezone ?? 'UTC'
+    const localHour = toLocalHour(now, tz)
+
+    // Determinar la fecha del Checkout record para el grid de housekeeping
+    let taskCheckoutAt: Date
+    if (localHour < HOUSEKEEPING_END_HOUR) {
+      // Dentro del turno → la tarea aparece en el planning de HOY
+      taskCheckoutAt = now
+    } else {
+      // Fuera del turno → la tarea aparece en el planning de MAÑANA
+      const tomorrowLocal = toLocalDate(new Date(now.getTime() + 86_400_000), tz)
+      // Fijamos a las 09:00 UTC para que quede dentro del rango UTC del día local de mañana
+      taskCheckoutAt = new Date(`${tomorrowLocal}T09:00:00.000Z`)
+    }
+
+    // Transacción principal: actualizar stay + crear housekeeping records
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Marcar GuestStay como early-checkout
+      await tx.guestStay.update({
+        where: { id: stayId },
+        data: {
+          actualCheckout: now,
+          checkedOutById: actorId,
+          // paymentStatus queda PENDING: puede haber reembolso parcial (Sprint 8)
+        },
+      })
+
+      // 2. Actualizar estado de la habitación
+      await tx.room.update({
+        where: { id: stay.roomId },
+        data: { status: 'CHECKING_OUT' },
+      })
+
+      // 3. Crear el Checkout record para el módulo de housekeeping
+      const checkout = await tx.checkout.create({
+        data: {
+          organizationId: orgId,
+          roomId: stay.roomId,
+          guestName: stay.guestName,
+          actualCheckoutAt: taskCheckoutAt,
+          source: 'MANUAL',
+          isEarlyCheckout: true,
+          notes: notes ?? null,
+        },
+      })
+
+      // 4. Crear CleaningTask(PENDING) por cada unidad (cama) de la habitación
+      //    Misma lógica que batchCheckout: PENDING porque el housekeeper aún
+      //    debe confirmar salida física (Fase 2 del flujo de 2 fases).
+      for (const unit of stay.room.units) {
+        const task = await tx.cleaningTask.create({
+          data: {
+            organizationId: orgId,
+            unitId: unit.id,
+            checkoutId: checkout.id,
+            status: 'PENDING',
+            taskType: 'CLEANING',
+            priority: 'MEDIUM',
+            hasSameDayCheckIn: false,
+          },
+        })
+        await tx.taskLog.create({
+          data: {
+            organizationId: orgId,
+            taskId: task.id,
+            staffId: actorId,
+            event: 'CREATED',
+            note: `Early checkout registrado${notes ? ` — ${notes}` : ''}`,
+          },
+        })
+      }
+
+      // 5. Si hay journey activo, recortar el segmento activo a la fecha de hoy
+      if (stay.stayJourney?.id && stay.stayJourney.segments.length > 0) {
+        const activeSegment = stay.stayJourney.segments[stay.stayJourney.segments.length - 1]
+        if (activeSegment && activeSegment.checkOut > now) {
+          await tx.staySegment.update({
+            where: { id: activeSegment.id },
+            data: { checkOut: now, status: 'COMPLETED' },
+          })
+        }
+        await tx.stayJourney.update({
+          where: { id: stay.stayJourney.id },
+          data: { status: 'CHECKED_OUT', journeyCheckOut: now },
+        })
+        await tx.stayJourneyEvent.create({
+          data: {
+            journeyId: stay.stayJourney.id,
+            eventType: 'CHECKED_OUT',
+            actorId,
+            payload: {
+              freedFrom: now.toISOString(),
+              freedTo: stay.scheduledCheckout.toISOString(),
+              tasksScheduledFor:
+                localHour < HOUSEKEEPING_END_HOUR ? 'today' : 'tomorrow',
+              notes: notes ?? null,
+            },
+          },
+        })
+      }
+    })
+
+    // Post-transaction: notificaciones best-effort (no revertir si fallan)
+    this.events.emit('checkout.early', {
+      roomId: stay.roomId,
+      propertyId: stay.propertyId,
+      orgId,
+      stayId,
+      guestName: stay.guestName,
+      freedFrom: now.toISOString(),
+      freedTo: stay.scheduledCheckout.toISOString(),
+    })
+
+    // Notify relevant staff about early checkout (best-effort — do NOT await)
+    void this.notifCenter.send({
+      propertyId:    stay.propertyId,
+      type:          'INFORMATIONAL',
+      category:      'EARLY_CHECKOUT',
+      priority:      'MEDIUM',
+      title:         `Salida anticipada — ${stay.guestName}`,
+      body:          `${stay.guestName} salió anticipadamente de Hab. ${stay.room.number}. ` +
+                     `Noches liberadas: ${now.toISOString()} → ${stay.scheduledCheckout.toISOString()}. ` +
+                     `Limpieza programada para ${localHour < HOUSEKEEPING_END_HOUR ? 'hoy' : 'mañana'}.`,
+      metadata:      { stayId, roomId: stay.roomId, freedFrom: now.toISOString(), freedTo: stay.scheduledCheckout.toISOString() },
+      actionUrl:     `/reservations/${stayId}`,
+      recipientType: 'ROLE',
+      recipientRole: 'SUPERVISOR',
+      triggeredById: actorId,
+    }).catch((err: Error) =>
+      this.logger.warn(`[EarlyCheckout] notification failed: ${err?.message}`),
+    )
+
+    // Liberar noches liberadas en Channex (best-effort, NO await dentro de tx)
+    const propSettings = stay.room?.property?.settings
+    const channexRoomTypeId = (stay.room as any)?.channexRoomTypeId as string | null | undefined
+    if (propSettings?.channexPropertyId && channexRoomTypeId) {
+      void this.channex.pushInventory({
+        channexPropertyId: propSettings.channexPropertyId,
+        roomTypeId:        channexRoomTypeId,
+        dateFrom:          toLocalDate(now, tz),
+        dateTo:            toLocalDate(stay.scheduledCheckout, tz),
+        delta:             +1,  // release freed nights
+        reason:            'RELEASE',
+        traceId:           `early_checkout_${stayId}`,
+      }).catch((err: Error) =>
+        this.logger.warn(`[EarlyCheckout] Channex push failed (non-critical): ${err?.message}`),
+      )
+    }
+
+    this.logger.log(
+      `[EarlyCheckout] stay=${stayId} guest="${stay.guestName}" ` +
+        `freedFrom=${now.toISOString()} freedTo=${stay.scheduledCheckout.toISOString()} ` +
+        `taskScheduled=${localHour < HOUSEKEEPING_END_HOUR ? 'today' : 'tomorrow'}`,
+    )
+
+    return {
+      success: true,
+      freedFrom: now.toISOString(),
+      freedTo: stay.scheduledCheckout.toISOString(),
+      tasksScheduledFor: localHour < HOUSEKEEPING_END_HOUR ? 'today' : 'tomorrow',
+    }
+  }
+
   async moveRoom(stayId: string, dto: MoveRoomDto, actorId: string) {
     const orgId = this.tenant.getOrganizationId()
     const stay = await this.prisma.guestStay.findUnique({
@@ -514,7 +744,7 @@ export class GuestStaysService {
       include: {
         room: {
           include: {
-            units: { select: { id: true } },
+            units:    { select: { id: true } },
             property: { include: { settings: true } },
           },
         },
@@ -611,6 +841,24 @@ export class GuestStaysService {
       orgId,
       guestName:  stay.guestName,
     })
+
+    // Notify supervisor about the no-show (best-effort — do NOT await)
+    void this.notifCenter.send({
+      propertyId:    stay.propertyId,
+      type:          chargeStatus === 'PENDING' ? 'ACTION_REQUIRED' : 'INFORMATIONAL',
+      category:      'NO_SHOW',
+      priority:      'HIGH',
+      title:         `No-show — ${stay.guestName}`,
+      body:          `${stay.guestName} fue marcado como no-show en Hab. ${stay.room.number}.` +
+                     (chargeStatus === 'PENDING' ? ' Cargo pendiente de procesamiento.' : ''),
+      metadata:      { stayId, roomId: stay.roomId },
+      actionUrl:     `/reservations/${stayId}`,
+      recipientType: 'ROLE',
+      recipientRole: 'SUPERVISOR',
+      triggeredById: actorId ?? undefined,
+    }).catch((err: Error) =>
+      this.logger.warn(`[NoShow] notification failed: ${err?.message}`),
+    )
 
     this.logger.log(`No-show marcado: stay=${stayId} guest="${stay.guestName}" fee=${feeAmount} ${chargeStatus}`)
     return { success: true, feeAmount: feeAmount.toString(), chargeStatus }

@@ -9,6 +9,44 @@ datasource db {
 
 // ======================= ENUMS =======================
 
+enum AppNotificationType {
+  INFORMATIONAL
+  ACTION_REQUIRED
+  APPROVAL_REQUIRED
+}
+
+enum AppNotificationCategory {
+  CHECKIN_UNCONFIRMED
+  EARLY_CHECKOUT
+  NO_SHOW
+  NO_SHOW_REVERTED
+  ARRIVAL_RISK
+  CHECKOUT_COMPLETE
+  TASK_COMPLETED
+  MAINTENANCE_REPORTED
+  PAYMENT_PENDING
+  SYSTEM
+}
+
+enum AppNotificationPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum NotificationRecipient {
+  USER
+  ROLE
+  PROPERTY_ALL
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+  ESCALATED
+}
+
 enum UnitStatus {
   AVAILABLE
   OCCUPIED
@@ -180,6 +218,7 @@ model Organization {
   roomReadinessTasks RoomReadinessTask[]
   stayJourneys       StayJourney[]
   roomBlocks         RoomBlock[]
+  appNotifications   AppNotification[]
 
   @@map("organizations")
 }
@@ -248,6 +287,7 @@ model Property {
   settings     PropertySettings?
   userRoles    UserPropertyRole[]
   stayJourneys StayJourney[]
+  appNotifications AppNotification[]
 
   @@index([organizationId])
   @@map("properties")
@@ -336,6 +376,9 @@ model HousekeepingStaff {
   approvedBlocks        RoomBlock[]      @relation("BlocksApproved")
   blockLogs             BlockLog[]       @relation("BlockLogs")
   contactLogs           GuestContactLog[] @relation("ContactLogs")
+  notificationsTriggered AppNotification[] @relation("NotifTriggeredBy")
+  notificationReads      AppNotificationRead[] @relation("NotifReadBy")
+  notificationApprovals  AppNotificationApproval[] @relation("NotifApprovedBy")
 
   @@index([organizationId])
   @@index([organizationId, propertyId])
@@ -606,7 +649,9 @@ model GuestStay {
   paxCount          Int           @default(1) @map("pax_count")
   checkinAt         DateTime      @map("checkin_at")
   scheduledCheckout DateTime      @map("scheduled_checkout")
-  actualCheckout    DateTime?     @map("actual_checkout")
+  actualCheckout       DateTime?     @map("actual_checkout")
+  actualCheckin        DateTime?     @map("actual_checkin")
+  checkinConfirmedById String?       @map("checkin_confirmed_by_id")
   ratePerNight      Decimal       @map("rate_per_night") @db.Decimal(10, 2)
   currency          String        @default("USD")
   totalAmount       Decimal       @map("total_amount") @db.Decimal(10, 2)
@@ -1091,4 +1136,77 @@ model GuestContactLog {
   @@index([stayId])
   @@index([sentAt])
   @@map("guest_contact_logs")
+}
+
+// ======================= NOTIFICATION CENTER =======================
+//
+// Persistent, stored notifications with full audit trail (Facebook-style).
+// Separate from NotificationsModule which provides ephemeral SSE streaming.
+//
+// Recipient targeting:
+//   USER         → recipientId = staffId (personal notification)
+//   ROLE         → recipientRole = HousekeepingRole (fan-out to role)
+//   PROPERTY_ALL → all staff in the property
+//
+// Type lifecycle:
+//   INFORMATIONAL    → read-only, no action needed
+//   ACTION_REQUIRED  → surfaced prominently until read
+//   APPROVAL_REQUIRED → records decision in AppNotificationApproval
+
+model AppNotification {
+  id             String                    @id @default(uuid())
+  organizationId String                    @map("organization_id")
+  propertyId     String?                   @map("property_id")
+  type           AppNotificationType
+  category       AppNotificationCategory
+  priority       AppNotificationPriority   @default(MEDIUM)
+  title          String
+  body           String
+  metadata       Json?
+  actionUrl      String?                   @map("action_url")
+  recipientType  NotificationRecipient     @map("recipient_type")
+  recipientId    String?                   @map("recipient_id")
+  recipientRole  HousekeepingRole?         @map("recipient_role")
+  triggeredById  String?                   @map("triggered_by_id")
+  expiresAt      DateTime?                 @map("expires_at")
+  createdAt      DateTime                  @default(now()) @map("created_at")
+  updatedAt      DateTime                  @updatedAt @map("updated_at")
+
+  organization   Organization              @relation(fields: [organizationId], references: [id])
+  property       Property?                 @relation(fields: [propertyId], references: [id])
+  triggeredBy    HousekeepingStaff?        @relation("NotifTriggeredBy", fields: [triggeredById], references: [id])
+  reads          AppNotificationRead[]
+  approvals      AppNotificationApproval[]
+
+  @@index([organizationId, propertyId, createdAt(sort: Desc)])
+  @@index([recipientId])
+  @@index([recipientRole])
+  @@map("app_notifications")
+}
+
+model AppNotificationRead {
+  id             String              @id @default(uuid())
+  notificationId String              @map("notification_id")
+  readById       String              @map("read_by_id")
+  readAt         DateTime            @default(now()) @map("read_at")
+
+  notification   AppNotification     @relation(fields: [notificationId], references: [id])
+  readBy         HousekeepingStaff   @relation("NotifReadBy", fields: [readById], references: [id])
+
+  @@unique([notificationId, readById])
+  @@map("app_notification_reads")
+}
+
+model AppNotificationApproval {
+  id             String              @id @default(uuid())
+  notificationId String              @map("notification_id")
+  action         ApprovalDecision
+  actionById     String              @map("action_by_id")
+  actionAt       DateTime            @default(now()) @map("action_at")
+  reason         String?
+
+  notification   AppNotification     @relation(fields: [notificationId], references: [id])
+  actionBy       HousekeepingStaff   @relation("NotifApprovedBy", fields: [actionById], references: [id])
+
+  @@map("app_notification_approvals")
 }

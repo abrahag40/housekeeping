@@ -25,7 +25,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 
-import { format, differenceInDays, differenceInHours } from 'date-fns'
+import { format, differenceInDays, differenceInHours, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
 
@@ -36,7 +36,8 @@ import {
 
 import { getStayStatus } from '../../utils/timeline.utils'
 import { PaymentStatusBadge } from '../shared/PaymentStatusBadge'
-import { useLogContact, useChargeNoShow, useWaiveNoShow } from '../../hooks/useGuestStays'
+import { useLogContact, useChargeNoShow, useWaiveNoShow, useEarlyCheckout } from '../../hooks/useGuestStays'
+import { EarlyCheckoutDialog } from './EarlyCheckoutDialog'
 
 import type { GuestStayBlock } from '../../types/timeline.types'
 
@@ -83,6 +84,8 @@ export function BookingDetailSheet({
   const waiveNoShow  = useWaiveNoShow(stay?.id ?? '')
   const [showWaiveInput, setShowWaiveInput] = useState(false)
   const [waiveReason, setWaiveReason] = useState('')
+  const [showEarlyCheckout, setShowEarlyCheckout] = useState(false)
+  const earlyCheckoutMutation = useEarlyCheckout(propertyId ?? '')
 
   if (!stay) return null
 
@@ -90,12 +93,17 @@ export function BookingDetailSheet({
   const statusColors = STAY_STATUS_COLORS[status]
   const otaColor = OTA_ACCENT_COLORS[stay.source] ?? OTA_ACCENT_COLORS.other
 
-  // No-show eligibility rules:
-  //  - ARRIVING: arrival date is today or past, guest never checked in → can mark no-show
-  //  - noShowAt set: already a no-show — show revert button within 48h window
   const isNoShow  = !!stay.noShowAt
   const canRevert = isNoShow && differenceInHours(new Date(), stay.noShowAt!) < 48
-  const canNoShow = !isNoShow && (status === 'ARRIVING' || status === 'IN_HOUSE')
+
+  // isArrivalDay: check-in date is exactly today (day granularity).
+  // Distinguishes two mutually exclusive IN_HOUSE sub-cases:
+  //   · isArrivalDay  → guest might not have arrived yet → "Marcar no-show"
+  //   · !isArrivalDay → past check-in day, system assumes guest arrived → "Salida anticipada"
+  // ARRIVING (future check-in) is excluded: you cannot no-show someone before their arrival day.
+  const isArrivalDay = startOfDay(new Date(stay.checkIn)).getTime() === startOfDay(new Date()).getTime()
+  const canNoShow       = !isNoShow && status === 'IN_HOUSE' && isArrivalDay
+  const canEarlyCheckout = !isNoShow && status === 'IN_HOUSE' && !isArrivalDay
 
   const isRoomMove = stay.segmentReason === 'ROOM_MOVE'
   const isSplit    = stay.segmentReason === 'SPLIT'
@@ -128,6 +136,7 @@ export function BookingDetailSheet({
   const balance = stay.totalAmount - stay.amountPaid
 
   return (
+    <>
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
@@ -885,24 +894,56 @@ export function BookingDetailSheet({
               </Button>
             )}
 
-            {!isNoShow && (status === 'IN_HOUSE' || status === 'DEPARTING') && (
+            {/* DEPARTING: checkout en fecha programada */}
+            {!isNoShow && status === 'DEPARTING' && (
               <Button
                 size="sm"
-                className={cn(
-                  'flex-1 text-xs text-white',
-                  status === 'DEPARTING'
-                    ? 'bg-amber-600 hover:bg-amber-700'
-                    : 'bg-slate-800 hover:bg-slate-700',
-                )}
+                className="flex-1 text-xs text-white bg-amber-600 hover:bg-amber-700"
                 onClick={() => onCheckout(stay.id)}
               >
                 <LogOut className="h-3.5 w-3.5 mr-1.5" />
-                {status === 'DEPARTING' ? 'Confirmar checkout' : 'Checkout'}
+                Confirmar checkout
+              </Button>
+            )}
+
+            {/* IN_HOUSE post-arrival: guest is staying and wants to leave early */}
+            {canEarlyCheckout && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="flex-1 text-xs border-amber-200 text-amber-700 hover:bg-amber-50"
+                onClick={() => setShowEarlyCheckout(true)}
+              >
+                <LogOut className="h-3.5 w-3.5 mr-1.5" />
+                Salida anticipada
               </Button>
             )}
           </div>
         </div>
       </SheetContent>
     </Sheet>
+
+    <EarlyCheckoutDialog
+      open={showEarlyCheckout}
+      onClose={() => setShowEarlyCheckout(false)}
+      onConfirm={(notes) => {
+        const stayId = stay.guestStayId ?? stay.id
+        earlyCheckoutMutation.mutate(
+          { stayId, notes },
+          {
+            onSuccess: () => {
+              setShowEarlyCheckout(false)
+              onClose()
+            },
+          },
+        )
+      }}
+      isPending={earlyCheckoutMutation.isPending}
+      guestName={stay.guestName}
+      roomLabel={stay.roomNumber ? `Hab. ${stay.roomNumber}` : 'Habitación'}
+      checkinAt={new Date(stay.checkIn)}
+      scheduledCheckout={new Date(stay.checkOut)}
+    />
+    </>
   )
 }
