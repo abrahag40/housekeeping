@@ -5,13 +5,14 @@ import {
   BlockSemantic,
   BlockStatus,
   Capability,
-  CheckoutSource,
   CleaningStatus,
   DiscrepancyStatus,
   DiscrepancyType,
   HousekeepingRole,
+  KeyDeliveryType,
   MaintenanceCategory,
   NoShowChargeStatus,
+  PaymentMethod,
   PmsMode,
   Priority,
   RoomCategory,
@@ -70,7 +71,6 @@ export interface RoomDto {
   floor: number | null
   category: RoomCategory
   capacity: number
-  cloudbedsRoomId: string | null
   units?: UnitDto[]
 }
 
@@ -90,8 +90,7 @@ export interface CheckoutDto {
   roomId: string
   guestName: string | null
   actualCheckoutAt: string
-  source: CheckoutSource
-  cloudbedsReservationId: string | null
+  source: 'MANUAL' | 'SYSTEM'
   isEarlyCheckout: boolean
   hasSameDayCheckIn: boolean
   notes: string | null
@@ -225,9 +224,72 @@ export interface GuestStayDto {
   noShowChargeStatus: NoShowChargeStatus | null
   noShowRevertedAt: string | null
   noShowRevertedById: string | null
+  // Sprint 8 — check-in confirmation
+  actualCheckin: string | null
+  checkinConfirmedById: string | null
+  // Sprint 9 — check-in extended fields
+  arrivalNotes: string | null
+  keyType: KeyDeliveryType | null
+  paymentLogs?: PaymentLogDto[]
   createdAt: string
   updatedAt: string
   room?: RoomDto
+}
+
+// ─── Payment ─────────────────────────────────────────────────────────────────
+
+export interface PaymentLogDto {
+  id: string
+  organizationId: string
+  propertyId: string
+  stayId: string
+  method: PaymentMethod
+  amount: string            // Decimal serialized as string
+  currency: string
+  reference: string | null
+  approvedById: string | null
+  approvalReason: string | null
+  isVoid: boolean
+  voidedAt: string | null
+  voidedById: string | null
+  voidReason: string | null
+  voidsLogId: string | null
+  shiftDate: string
+  collectedById: string
+  createdAt: string
+}
+
+export interface CashSummaryDto {
+  date: string
+  propertyId: string
+  totalCash: string
+  byCollector: {
+    collectedById: string
+    collectorName: string
+    total: string
+    count: number
+  }[]
+}
+
+// ─── Check-in Confirmation ───────────────────────────────────────────────────
+
+export interface PaymentEntryInput {
+  method: PaymentMethod
+  amount: number
+  reference?: string
+  approvedById?: string
+  approvalReason?: string
+}
+
+export interface ConfirmCheckinInput {
+  documentVerified: boolean
+  documentType?: string
+  documentNumber?: string
+  arrivalNotes?: string
+  keyType?: KeyDeliveryType
+  payments: PaymentEntryInput[]
+  managerApprovalCode?: string
+  managerApprovalReason?: string
 }
 
 // ─── Property Settings ────────────────────────────────────────────────────────
@@ -330,11 +392,20 @@ export type SseEventType =
   | 'block:expired'
   | 'block:cancelled'
   | 'block:extended'
+  // Checkout events
+  | 'checkout:early'
   // No-show events
   | 'stay:no_show'
   | 'stay:no_show_reverted'
   // Pre-arrival warning (potential no-show)
   | 'arrival:at_risk'
+  // Soft-lock advisory (intra-Zenix overbooking UX — no hard block)
+  | 'soft:lock:acquired'
+  | 'soft:lock:released'
+  // Notification center — real-time bell push
+  | 'notification:new'
+  // Check-in confirmation
+  | 'checkin:confirmed'
 
 // ─── Offline Sync (Mobile) ────────────────────────────────────────────────────
 

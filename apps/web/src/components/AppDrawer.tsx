@@ -31,7 +31,6 @@ import { DiscrepancyStatus } from '@zenix/shared'
  *    onSelect handlers), so one click gets the user to their page.
  *
  * Sources:
- *   · Cloudbeds PMS Menus and Site Map — myfrontdesk.cloudbeds.com
  *   · NN/G "Hamburger Menus Hurt UX Metrics" (2024, updated)
  *   · Clerk multi-tenant header conventions (property switcher sits
  *     beside this drawer trigger, not inside it)

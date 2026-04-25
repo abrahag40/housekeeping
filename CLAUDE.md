@@ -1,20 +1,72 @@
-# CLAUDE.md — Housekeeping Management System
+# CLAUDE.md — Zenix PMS
 
 > Guía para retomar el proyecto desde cero. Lee esto antes de tocar código.
-> Última actualización: 2026-04-23 (Contact feature + pre-arrival cron sprint; §34 no-show visibility; §35 contact log).
+> Última actualización: 2026-04-25 (Sprint 7B ✅ + 7C ✅ + 7D ✅ + 8 ✅ + 8E ✅ + 8F ✅ completos; Sprint 8F — Ventana temporal de no-show con día hotelero real: `potentialNoShowWarningHour` + `noShowCutoffHour`; botón "Revertir no-show" en tooltip; guard backend anti-precipitación; Channex gateway integrado; Cloudbeds eliminado).
+
+---
+
+## Principio Rector de Diseño — Obligatorio en Todo Código
+
+> **Este principio aplica a CADA decisión de UI, flujo, arquitectura de información, y experiencia de usuario. No es opcional.**
+
+Todo código, componente, flujo o pantalla que se escriba en Zenix debe estar cimentado en:
+
+**Estándares globales con base psicológica, comportamiento humano y neuromarketing**, con la finalidad de crear sistemas precisos, entendibles, transparentes, claros y fluidos.
+
+### Marco de referencia obligatorio
+
+**Psicología cognitiva y comportamiento humano:**
+- **Carga cognitiva (Sweller, 1988)** — minimizar la información simultánea en pantalla. El cerebro humano procesa 7±2 elementos en memoria de trabajo (Miller, 1956). Todo panel, modal o vista debe respetar este límite.
+- **Ley de Hick (1952)** — el tiempo de decisión aumenta logarítmicamente con el número de opciones. Reducir opciones visibles = reducir tiempo de reacción del operador.
+- **Ley de Fitts (1954)** — el tiempo para alcanzar un objetivo depende de su tamaño y distancia. Botones de acción frecuente deben ser grandes y cercanos al foco natural de atención.
+- **Efecto de posición serial (Ebbinghaus)** — los usuarios recuerdan mejor lo primero y lo último. La información más crítica va al inicio o al final, nunca al centro de una lista larga.
+- **Modelo de procesamiento dual (Kahneman, 2011)** — el Sistema 1 (rápido, automático) toma la mayoría de decisiones operativas. El diseño debe soportar operación por Sistema 1 en flujos rutinarios, y activar Sistema 2 (lento, deliberado) solo en decisiones de alto impacto (confirmaciones destructivas).
+
+**Estándares de usabilidad global:**
+- **Nielsen Norman Group — 10 Heurísticas de Usabilidad (1994, rev. 2020)** — visibilidad del estado del sistema, control del usuario, prevención de errores, reconocimiento sobre recuerdo.
+- **Apple Human Interface Guidelines (2024)** — feedback inmediato, acciones destructivas con confirmación, diseño para la 100ª sesión no la 1ª.
+- **ISO 9241-110:2020** — autodescripción, controlabilidad, conformidad con expectativas del usuario, tolerancia a errores.
+- **WCAG 2.1 AA** — contraste mínimo 4.5:1 para texto normal, 3:1 para UI components. `motion-reduce` en todas las animaciones.
+
+**Neuromarketing y percepción:**
+- **Psicología del color (Mehrabian-Russell, 1974; Cialdini, 1984)** — colores con semántica precisa: `emerald` = disponibilidad/acción positiva ("go"), `amber` = advertencia no-bloqueante (advisory), `red` = rechazo/escasez/urgencia. El recepcionista debe poder tomar decisiones solo por color, sin leer texto.
+- **Principio de proximidad (Gestalt)** — elementos relacionados visualmente cercanos. Acciones de una reserva agrupadas, no dispersas en la pantalla.
+- **Efecto de encuadre (Tversky & Kahneman, 1981)** — cómo se presenta la información determina la decisión. Un precio delta "€12 adicionales" se percibe diferente a "€12 de cargo extra". Los modales de confirmación usan lenguaje positivo-neutro, nunca alarmista innecesario.
+- **Flujo (Csikszentmihalyi, 1990)** — el operador en estado de flujo comete menos errores. Interfaces fluidas, predecibles y sin interrupciones innecesarias mantienen al usuario en estado de flujo.
+- **Principio de escasez visual** — los badges de urgencia (`🔴 Hoy entra`, `🔒 En uso`) usan rojo/amber porque el cerebro humano responde con atención prioritaria a estas señales de advertencia (evolución: señales de peligro = rojo/naranja).
+
+### Cómo aplicar este principio al escribir código
+
+Antes de implementar cualquier componente UI, responder:
+1. **¿Cuántos elementos simultáneos ve el usuario?** → Si son más de 5, agrupar o colapsar.
+2. **¿El color comunica el estado correctamente?** → Usar el sistema de color semántico de Zenix (emerald/amber/red), nunca colores arbitrarios.
+3. **¿El flujo requiere Sistema 1 o Sistema 2?** → Flujo rutinario = mínima fricción. Acción destructiva = confirmación explícita (forcing function).
+4. **¿El feedback es inmediato?** → Toda acción debe tener respuesta visual en ≤100ms (loading state, cambio de color, toast).
+5. **¿La animación tiene propósito?** → Usar `--ease-spring` (entrada) y `--ease-sharp-out` (salida). Nunca animar solo por estética.
+6. **¿El error es informativo?** → Nunca "Error genérico". Siempre: qué pasó + por qué + qué puede hacer el usuario.
 
 ---
 
 ## Project Overview
 
-Sistema de gestión de housekeeping para hostales/hoteles con dormitorios compartidos y habitaciones privadas. Reemplaza el proceso en papel: el recepcionista planifica las salidas del día, confirma cuando el huésped sale físicamente, y housekeeping recibe notificaciones push para limpiar.
+**Zenix es un PMS (Property Management System)** para hoteles boutique y hostales de LATAM con dormitorios compartidos y habitaciones privadas. El eje central del sistema es el **calendario de reservas**, que actúa como fuente de verdad de todos los datos de huéspedes, ocupación y operación.
+
+Del calendario se derivan todos los módulos del sistema:
+- **Housekeeping** — el calendario sabe qué habitaciones tienen checkout hoy y activa las tareas de limpieza correspondientes
+- **No-shows** — el calendario sabe qué huéspedes no llegaron y dispara el flujo fiscal de no-show
+- **Reportes** — el calendario es la fuente de verdad de ocupación, revenue y métricas operativas
+- **Mantenimiento** — el calendario sabe qué habitaciones están bloqueadas y por qué
+- **Disponibilidad** — toda verificación de inventario consulta el estado del calendario antes de confirmar cualquier reserva
+
+> **Nota histórica:** el proyecto comenzó explorando el módulo de housekeeping como prueba de concepto. Desde Sprint 6 el sistema es un PMS completo. El repositorio conserva el nombre `housekeeping3` por continuidad técnica, pero el producto es Zenix PMS.
 
 **Ventajas competitivas vs PMS del mercado (Mews, Opera Cloud, Cloudbeds, Clock PMS+):**
-- **Gestión per-bed** — tarea por cama, no por habitación. Solo Mews lo ofrece parcialmente.
-- **Checkout de 2 fases** — planificación AM + confirmación física. Ningún competidor lo tiene.
-- **Offline mobile con cola de sync** — ningún PMS soporta operación offline.
-- **SSE en tiempo real** — al nivel de los PMS premium (Mews, Opera, Clock PMS+).
+- **Calendario PMS con SSE en tiempo real** — al nivel de los PMS premium. El estado de cada habitación se actualiza en pantalla sin recargar.
+- **Gestión per-bed nativa** — tarea por cama, no por habitación. Solo Mews lo ofrece parcialmente. Construido desde el primer día para la realidad de los hostales.
+- **Checkout de 2 fases** — planificación AM + confirmación física. Ningún competidor lo tiene. Elimina el problema de housekeepers que limpian habitaciones con huéspedes adentro.
+- **App móvil offline con cola de sync** — ningún PMS entry-level soporta operación offline. Crítico para pisos sin señal wifi consistente.
 - **Auditoría fiscal-grade de no-shows** — trail inmutable, ventana de reversión de 48h, cargos traceables. Opera/Cloudbeds no tienen revert auditado; Mews tiene revert pero sin cumplimiento fiscal LATAM.
+- **Pre-arrival warming con WhatsApp automático** — detección temprana de no-shows a las 20:00 local con outreach automático. Ningún PMS del mercado lo tiene.
 - **Night audit multi-timezone** — scheduler per-propiedad usando IANA timezone. Un cliente con hoteles en México, Colombia y España recibe el corte en la hora local correcta de cada propiedad. Ningún PMS entry-level resuelve esto.
 
 ---
@@ -1616,6 +1668,10 @@ npx prisma studio
 25. **Psicología del color en el calendario** — cada color tiene semántica precisa: `emerald` = disponibilidad/acción positiva (Verde = "go", Mehrabian-Russell 1974); `amber` = advertencia no-bloqueante (semáforo advisory); `red` = rechazo/escasez (Cialdini 1984); OccupancyFooter: ≥80% → red, 50-79% → amber, <50% → emerald. El recepcionista puede tomar decisiones sin leer texto — solo por color y posición espacial.
 
 26. **SSE Soft-Lock TTL = 90s con cleanup en unmount** — el advisory lock se libera INMEDIATAMENTE cuando el dialog se cierra (cleanup del `useEffect`). El TTL de 90s es solo fallback para crashes/tabs cerradas sin unmount limpio. No hay delay artificial. El soft-lock cubre solo overbooking intra-Zenix; overbooking cross-channel (OTAs) se cubre con Channex.io (Sprint 8).
+    - **Lock es por habitación, no por rango de fechas.** Múltiples recepcionistas pueden tener abierta la misma habitación para fechas distintas — todos ven el badge, pero la protección real es `checkAvailability` al confirmar.
+    - **Single-entry por roomId en el servidor.** Si N recepcionistas abren la misma habitación, el badge muestra el nombre del último en adquirir (last-writer). Los heartbeats de todos los recepcionistas activos renuevan el TTL correctamente aunque sus nombres no estén en el badge.
+    - **Dialogs que adquieren el lock:** `CheckInDialog` y `BookingDetailSheet`. Ambos liberan el lock en el cleanup del `useEffect` al cerrarse.
+    - **TOCTOU es inherente:** entre el pre-flight `checkAvailability` (Paso 2 del dialog) y la confirmación final pueden pasar hasta 60 segundos. En ese intervalo otro proceso puede tomar la habitación. El hard block del servidor es la defensa final. Este gap es estándar en todos los PMS del mercado incluyendo Opera y Mews.
 
 27. **Housekeeping bridge: PMS → Housekeeping automático** — al ejecutar `extendNewRoom` o `executeMidStayRoomMove` en el backend, se debe crear automáticamente una `CleaningTask(PENDING)` para la habitación/cama liberada y emitir SSE `task:planned`. El recepcionista NO notifica manualmente a housekeeping. El enum `CleaningTaskSource` (CHECKOUT / STAYOVER / ROOM_CHANGE / EXTENSION) está documentado como TODO para distinguir el origen de cada tarea (ver `schema.prisma` TODO comment).
 
@@ -1685,6 +1741,20 @@ npx prisma studio
 
 34. **Bloques de no-show permanecen visibles en el calendario** — los bloques con `noShowAt != null` deben mantenerse visibles con rayas diagonales rojas + badge "NS". Nunca eliminarlos del render. Razones: cumplimiento fiscal (el registro debe estar accesible para auditores), llegadas tardías (el huésped puede llegar horas después), disputas de chargeback (el banco requiere evidencia de que la reserva existió), y métricas de revenue management (tasa de no-show es KPI estándar de la industria). Referencia de la industria: Opera Cloud, Mews, Cloudbeds y Clock PMS+ mantienen los bloques de no-show visibles por defecto con indicador visual diferenciado. Se puede ofrecer un toggle "Ocultar no-shows" (default: visible) para operadores que prefieran una vista más limpia, pero nunca ocultarlos por defecto ni eliminar el bloque del DOM. Divulgación progresiva en 3 niveles: bloque (badge NS + rayas) → tooltip (caja roja explicando rayas + ventana de reversión) → panel (banner rojo con timestamp y estado de reversión).
 
+36. **Ventana temporal de no-show basada en el día hotelero real — no en la medianoche del calendario** — el día hotelero termina en el night audit (`noShowCutoffHour`, default 2 AM local), no a medianoche. Esto genera tres reglas operativas de obligatorio cumplimiento en todo el código frontend y backend:
+
+    **Regla 1 — Antes de `potentialNoShowWarningHour` (default 20:00) en el día de llegada:** solo "Iniciar check-in" disponible. Marcar no-show a las 4 PM sin evidencia de ausencia es una decisión prematura que puede generar disputas. El badge NS no aparece en el tooltip ni en el bloque.
+
+    **Regla 2 — Después de las 20:00 y hasta `noShowCutoffHour` (default 02:00 del día siguiente):** ambas acciones coexisten. El huésped puede llegar tarde; el recepcionista puede decidir no-show. Ambos botones visibles simultáneamente.
+
+    **Regla 3 — Antes del night audit del día siguiente (e.g. 01:00 AM):** el bloque sigue siendo `UNCONFIRMED` (amber), NO verde `IN_HOUSE`. Un huésped con checkIn=ayer que no confirmó llegada y es la 1 AM del mismo "día hotelero" aún puede aparecer — el sistema no lo da por llegado. `getStayStatus()` recibe `nightAuditHour` como 6° argumento (backward-compatible, default 2).
+
+    **Implementación frontend:** `usePropertySettings` fetchea `GET /settings` con React Query (staleTime 5 min). `TimelineScheduler` → `BookingsLayer` → `BookingBlock` reciben `potentialNoShowWarningHour` y `noShowCutoffHour` como props. `isPotentialNoShow` usa `isAfterWarningHour` (computado con `isArrivalCalendarDay`, `isPrevCalendarDay`, `nowHour`).
+
+    **Implementación backend:** `markAsNoShow()` en `GuestStaysService` tiene un guard que lanza `ConflictException` si `checkinLocal === todayLocal && currentLocalHour < warningHour`. Usa los helpers `toLocalDate()` y `toLocalHour()` ya existentes (líneas 26–38 del servicio).
+
+    **Archivos clave:** `timeline.utils.ts` (getStayStatus 6° param), `usePropertySettings.ts` (hook nuevo), `BookingBlock.tsx` (isPotentialNoShow reescrito), `guest-stays.service.ts` (guard markAsNoShow), `TooltipPortal.tsx` (botón "Revertir no-show" amber, canRevert < 48h).
+
 35. **Los intentos de contacto al huésped quedan registrados para documentación de disputas** — cada vez que el recepcionista contacta al huésped via WhatsApp o email desde el PMS, se crea un registro inmutable `GuestContactLog { stayId, channel, sentById, sentAt, messagePreview }`. Este registro es append-only (sin update ni delete). Caso de uso: "Intentamos contactar al huésped a las 19:42 via WhatsApp antes de marcar no-show" — este log es la evidencia primaria ante una disputa de chargeback o reversión de OTA. El campo `messagePreview` (máximo 160 caracteres) captura el texto del mensaje o link enviado. El enum `ContactChannel` incluye `WHATSAPP`, `EMAIL`, `PHONE`. Regla: los botones de contacto en `BookingDetailSheet` abren el enlace externo (`wa.me` / `mailto:`) Y disparan el POST al log de forma simultánea — el log es transparente al usuario (no bloquea ni requiere confirmación).
 
 ---
@@ -1716,8 +1786,14 @@ npx prisma studio
 | Columna de hoy resaltada (emerald) | ✅ Completo | `TodayColumnHighlight.tsx` |
 | GlobalTopBar (hamburger + [+] + bell) | ✅ Completo | `Sidebar.tsx`, `AppDrawer.tsx` |
 | Night audit multi-timezone | ✅ Completo | `night-audit.scheduler.ts` |
-| Extender en otra habitación (paso 2) | ⏳ Sprint 7B | `ExtendConfirmDialog.tsx` |
-| SSE Soft-Lock (advisory, 90s TTL) | ⏳ Sprint 7C | `useSoftLock.ts`, `NotificationsService` |
+| Extender en otra habitación (paso 2) | ✅ Sprint 7B | `ExtendConfirmDialog.tsx`, `useGuestStays.ts` |
+| SSE Soft-Lock (advisory, 90s TTL) | ✅ Sprint 7C | `useSoftLock.ts`, `RoomColumn.tsx`, `BookingDetailSheet.tsx` |
+| Salida anticipada (early checkout) | ✅ Sprint 7D | `BookingDetailSheet.tsx`, `guest-stays.service.ts` |
+| Notification Center (bell panel) | ✅ Sprint 7D | `NotificationPanel.tsx`, `useNotifications.ts`, `notification-center.*` |
+| Status UNCONFIRMED (hoy sin check-in real) | ✅ Sprint 8 | `timeline.utils.ts`, `STAY_STATUS_COLORS`, `BookingBlock.tsx` |
+| ConfirmCheckinDialog (4 pasos + pagos) | ✅ Sprint 8 | `ConfirmCheckinDialog.tsx`, `TimelineScheduler.tsx` |
+| PaymentLog append-only (CASH/CARD/OTA/COMP) | ✅ Sprint 8 | `PaymentLog` Prisma, `confirmCheckin` endpoint, `useConfirmCheckin` |
+| Check-in certificado AHLEI: doc + keyType + arrivalNotes | ✅ Sprint 8E | `ConfirmCheckinDialog.tsx`, `confirm-checkin.dto.ts`, `KeyDeliveryType` enum |
 | OccupancyFooter color por ocupación | ⏳ Sprint 7A pendiente | `TimelineGrid.tsx` |
 | Stayover tasks automáticas | ⏳ P1 Roadmap | `StayoverService` |
 | KanbanPage (supervisor board) | ⚠️ Esqueleto | `KanbanPage.tsx` |
@@ -1726,9 +1802,240 @@ npx prisma studio
 
 ---
 
-## Sprint 8 Scope — Gestión de Tarifas + Channex.io
+## Sprint 7D — Notification Center + Salida Anticipada
 
-> Este sprint es independiente y dedicado. No mezclar con Sprint 7.
+### Notification Center (`NotificationCenterModule`)
+
+**Responsabilidad:** Módulo de infraestructura independiente que cualquier dominio puede usar para crear notificaciones en tiempo real con audit trail completo.
+
+**Independencia:** No importa ningún módulo de dominio (ni `GuestStays`, ni `Checkouts`, ni `SmartBlock`). Solo depende de `PrismaService`, `TenantContextService` y `NotificationsModule` (SSE). Esto permite que cualquier módulo futuro lo inyecte sin riesgo de dependencias circulares.
+
+**Principio de diseño (Kahneman Sistema 2):** Solo `ACTION_REQUIRED` y `APPROVAL_REQUIRED` activan un segundo paso explícito en la UI. `INFORMATIONAL` se descarta con un tap. Carga cognitiva mínima: 3 categorías visuales (URGENTE / acción / informativo), el recepcionista procesa por color + ícono, no leyendo texto.
+
+**Schema (3 modelos Prisma):**
+- `AppNotification` — registro principal con 10 categorías, 4 prioridades, 3 tipos de recipient
+- `AppNotificationRead` — quién leyó, cuándo (unique per notif+reader)
+- `AppNotificationApproval` — quién aprobó/rechazó, cuándo, razón
+
+**Archivos clave:**
+```
+apps/api/src/notification-center/
+├── notification-center.module.ts      Exports NotificationCenterService
+├── notification-center.service.ts     send(), listForUser(), markRead(), markAllRead(), approve(), reject(), unreadCount()
+└── notification-center.controller.ts  7 endpoints bajo /v1/notification-center
+
+apps/web/src/
+├── api/notifications.api.ts           API client tipado
+├── hooks/useNotifications.ts          React Query + mutations
+└── components/NotificationPanel.tsx   Panel deslizante del bell icon
+```
+
+**Flujo SSE:** al llamar `send()`, el servicio crea el registro en BD y emite `notification:new` via el SSE existente de la propiedad. El frontend con `useSSE` invalida el query y el badge se actualiza en tiempo real.
+
+**Categorías disponibles:**
+`CHECKIN_UNCONFIRMED` | `EARLY_CHECKOUT` | `NO_SHOW` | `NO_SHOW_REVERTED` | `ARRIVAL_RISK` | `CHECKOUT_COMPLETE` | `TASK_COMPLETED` | `MAINTENANCE_REPORTED` | `PAYMENT_PENDING` | `SYSTEM`
+
+**Cómo usar desde cualquier servicio de dominio:**
+```typescript
+// Inyectar en constructor:
+constructor(private readonly notifCenter: NotificationCenterService) {}
+
+// Enviar notificación:
+void this.notifCenter.send({
+  propertyId: stay.propertyId,
+  type:        'ACTION_REQUIRED',
+  category:    'EARLY_CHECKOUT',
+  priority:    'HIGH',
+  title:       `Salida anticipada — ${guestName}`,
+  body:        `La habitación ${roomNumber} quedó libre antes de lo previsto.`,
+  recipientType: 'ROLE',
+  recipientRole: HousekeepingRole.SUPERVISOR,
+  triggeredById: actorId,
+  actionUrl:   `/reservations/${stayId}`,
+}).catch((e) => this.logger.warn(`notif send failed: ${e.message}`))
+```
+
+### Salida Anticipada (Early Checkout)
+
+**Qué hace:** El recepcionista puede cerrar una estadía activa antes de su fecha programada. Útil cuando el huésped decide irse antes sin haber planificado un checkout de housekeeping.
+
+**Flujo:**
+1. Botón "Salida anticipada" visible en `BookingDetailSheet` solo cuando `status === 'IN_HOUSE' && !isArrivalDay`
+2. `EarlyCheckoutDialog` confirma con fecha real de salida
+3. `POST /v1/guest-stays/:id/early-checkout` → `earlyCheckout()` en `GuestStaysService`
+4. Servidor: cierra el último `StaySegment` activo (`checkOut = now, status = COMPLETED`), libera unidades, registra `JourneyEvent(CHECKED_OUT)`, emite SSE `checkout:early`, notifica a housekeeping vía `NotificationCenterService`
+
+**Lógica `isArrivalDay`:**
+```typescript
+const isArrivalDay = startOfDay(new Date(stay.checkIn)).getTime() === startOfDay(new Date()).getTime()
+const canNoShow        = !isNoShow && status === 'IN_HOUSE' && isArrivalDay
+const canEarlyCheckout = !isNoShow && status === 'IN_HOUSE' && !isArrivalDay
+```
+
+**Por qué son mutuamente excluyentes:** No-show aplica cuando el huésped nunca llegó (lógicamente el día de entrada). Early checkout aplica cuando el huésped ya está adentro y decide salir antes. El sistema usa `isArrivalDay` como heurística hasta que se implemente `actualCheckin` en Sprint 8E.
+
+### Decisión pendiente: `actualCheckin` (Sprint 8E)
+
+**Problema arquitectónico detectado:** El status `IN_HOUSE` se deriva solo de fechas (`checkIn ≤ hoy < checkOut`). El sistema asume que si hoy es día de llegada, el huésped llegó — pero esto no es confirmado por ningún actor.
+
+**Propuesta documentada para Sprint 8E:**
+- Agregar `GuestStay.actualCheckin DateTime?` y `checkinConfirmedById String?` al schema
+- Nuevo status derivado `UNCONFIRMED` para el día de llegada antes de confirmación
+- Botón "Confirmar llegada" en `BookingDetailSheet` visible solo en status `UNCONFIRMED`
+- Notificación `CHECKIN_UNCONFIRMED` generada por el night audit cuando `checkinAt <= now` y `actualCheckin == null`
+- Solo después de `actualCheckin != null` el status pasa a `IN_HOUSE` real
+- Esto elimina la ambigüedad `IN_HOUSE` vs `NO_SHOW` para el día de llegada
+
+---
+
+## Sprint 8 — Check-in Confirmation + Payment Foundation ✅ Completado
+
+### Qué implementa
+
+**Problema resuelto:** el sistema asumía que un huésped había llegado si `checkIn ≤ hoy`, produciendo falsos `IN_HOUSE` para no-shows y ghost check-ins sin rastro. Zenix 8 introduce confirmación explícita de llegada y audit trail inmutable de pagos.
+
+**Backend (Sprint A):**
+
+- `PaymentMethod` enum en `packages/shared/src/enums.ts`: `CASH | CARD_TERMINAL | BANK_TRANSFER | OTA_PREPAID | COMP`
+- Modelo `PaymentLog` (append-only, sin `updatedAt`) en Prisma — USALI 12ª edición. Campos: `collectedById`, `approvedById`, `isVoid`, `voidsLogId`, `shiftDate`
+- `CHECKED_IN` añadido a `JourneyEventType`
+- Migración: `20260424201948_add_payment_log_and_checkin_confirmed`
+- `confirmCheckin(stayId, dto, actorId)` — 7 guards en orden (ya confirmado, no-show, fecha futura, doc no verificado, balance sin pago, COMP sin aprobación, terminal sin referencia)
+- `registerPayment`, `voidPayment`, `getCashSummary` en `GuestStaysService`
+- 4 rutas nuevas en controller: `POST confirm-checkin`, `POST :id/payments`, `POST payments/:id/void`, `GET cash-summary` (declarada antes de `:id`)
+- SSE `checkin:confirmed` en `PmsSseListener`
+
+**Frontend (Sprint B):**
+
+- `UNCONFIRMED` agregado a `StayStatus` — solo para llegadas del día sin `actualCheckin`
+- `getStayStatus()` acepta 4° parámetro `actualCheckin?: Date` (backward-compatible)
+- `STAY_STATUS_COLORS.UNCONFIRMED` — amber `rgba(245,158,11,0.08)`
+- `TooltipPortal` rediseñado: `w-96`, dos columnas, CTA "Iniciar check-in" (emerald + `LogIn`) cuando `UNCONFIRMED`
+- `ConfirmCheckinDialog` — wizard 4 pasos: Datos → Identidad → Pago → Confirmar
+- `useConfirmCheckin` hook con invalidación de queries + toast de éxito
+- `BookingDetailSheet`: chip amber "Sin confirmar", botón "Confirmar check-in" cuando `UNCONFIRMED`
+- Prop `onStartCheckin` propagada: `TooltipPortal` → `BookingBlock` → `BookingsLayer` → `TimelineScheduler`
+- `ConfirmCheckinDialog` montado en `TimelineScheduler` (mismo patrón que `CheckOutDialog`)
+
+### Decisión: `actualCheckin` (antes pendiente como Sprint 8E)
+
+**Implementado.** `GuestStay.actualCheckin DateTime?` y `checkinConfirmedById String?` existían en schema desde Sprint 7D. El Sprint 8 agrega el endpoint y el flujo completo que los llena.
+
+La lógica `isArrivalDay` en `BookingDetailSheet` sigue válida como heurística para mostrar "Marcar no-show" vs "Salida anticipada". Ahora convive con `UNCONFIRMED` que provee mayor precisión cuando el check-in real está registrado.
+
+### Sprint 8 Extended — Check-in Certificado AHLEI/HFTP ✅ Completado
+
+**Problema resuelto:** el wizard `ConfirmCheckinDialog` original capturaba identidad como un checkbox booleano (`documentVerified`) sin guardar los datos reales del documento. Tampoco registraba el tipo de llave entregada ni notas de llegada — trazabilidad legal incompleta.
+
+**Backend:**
+- Migración `add_checkin_extended_fields`: enum `KeyDeliveryType` + campos `arrivalNotes String?` y `keyType KeyDeliveryType?` en `GuestStay`
+- `KeyDeliveryType` enum en `packages/shared/src/enums.ts`: `PHYSICAL | CARD | CODE | MOBILE`
+- `GuestStayDto` expandido: `arrivalNotes`, `keyType` nuevos campos
+- `ConfirmCheckinInput` expandido: `documentType?`, `documentNumber?`, `arrivalNotes?`, `keyType?`
+- `confirm-checkin.dto.ts`: 4 campos nuevos con `@IsOptional()`
+- `confirmCheckin()`: guarda en transacción `documentType`, `documentNumber` (con fallback al valor existente en la reserva), `arrivalNotes`, `keyType`
+- Payload audit en `StayJourneyEvent(CHECKED_IN)`: número de documento enmascarado `***1234` (PII — GDPR/LGPD)
+
+**Frontend:**
+- Step 1 (Reserva): campo `arrivalNotes` textarea + solicitudes especiales read-only
+- Step 2 (Identidad): dropdown tipo documento + input número + checkbox (todos opcionales — no bloquean avanzar)
+- Step 4 (Entrega + Confirmación): selector pill de 4 tipos de llave (PHYSICAL/CARD/CODE/MOBILE), requerido con default `PHYSICAL`
+- `ReservationDetailPage` tab "Estadía": muestra documento enmascarado, tipo de llave con ícono, notas de llegada (si existen)
+
+**Decisión: `keyType` requerido con default `PHYSICAL`** — cerrar el check-in sin registrar qué acceso se entregó es el gap más visible para auditoría. El default cubre el 80% de casos (LATAM usa llave física), la selección explícita deja trazabilidad.
+
+**Decisión: `documentType`/`documentNumber` opcionales** — el checkbox es el forcing function de seguridad; el número es evidencia adicional para disputes. Enriquecer sin bloquear (principio Mews).
+
+---
+
+## Sprint 8F — Ventana Temporal de No-Show (Día Hotelero Real) ✅ Completado
+
+### Problema resuelto
+
+El sistema anterior permitía marcar no-show a las 4:00 PM del día de llegada — cuando el huésped no ha tenido tiempo suficiente para aparecer. Peor aún: a la 1:00 AM del día siguiente (mismo "día hotelero" antes del night audit), el bloque aparecía como `IN_HOUSE` verde aunque el huésped nunca llegó. Esta discrepancia generaba confusión operativa y potenciales conflictos fiscales.
+
+### Modelo del día hotelero
+
+El día hotelero en hotelería no termina a medianoche — termina en el night audit (default 2 AM). Esta es la convención estándar de la industria (Opera Cloud, Mews, ISAHC). Zenix ahora implementa este modelo correctamente en todos los cálculos de no-show.
+
+### Configuración en `PropertySettings` (ya existía en schema)
+
+| Campo | Default | Semántica |
+|-------|---------|-----------|
+| `potentialNoShowWarningHour` | `20` | Hora desde la que el badge/acción de no-show es visible |
+| `noShowCutoffHour` | `2` | Hora en que el night audit corre — fin real del día hotelero |
+| `timezone` | `"America/Cancun"` | Ambas horas son locales a la propiedad |
+
+### Ventanas de acción resultantes
+
+| Hora local | Estado visible | Acciones disponibles |
+|-----------|---------------|---------------------|
+| Llegada – 19:59 | `UNCONFIRMED` | Solo "Iniciar check-in" |
+| 20:00 – 23:59 | `UNCONFIRMED` | "Iniciar check-in" + "Marcar no-show" (coexisten) |
+| 00:00 – 01:59 (día siguiente, antes de audit) | `UNCONFIRMED` (no `IN_HOUSE`) | "Iniciar check-in" + "Marcar no-show" |
+| ≥ 02:00 (post-audit) | `NO_SHOW` (si night audit corrió) | Solo "Revertir no-show" (< 48h) |
+
+### Archivos modificados
+
+**Frontend:**
+- `apps/web/src/hooks/usePropertySettings.ts` *(nuevo)* — hook React Query para `GET /settings`
+- `apps/web/src/modules/rooms/utils/timeline.utils.ts` — `getStayStatus()` acepta `nightAuditHour` como 6° parámetro opcional (backward-compatible, default 2). Nuevo caso UNCONFIRMED para "día siguiente antes del audit".
+- `apps/web/src/modules/rooms/components/timeline/TimelineScheduler.tsx` — usa `usePropertySettings`, pasa props a `BookingsLayer`
+- `apps/web/src/modules/rooms/components/timeline/BookingsLayer.tsx` — recibe y reenvía `potentialNoShowWarningHour` / `noShowCutoffHour` a cada `BookingBlock`
+- `apps/web/src/modules/rooms/components/timeline/BookingBlock.tsx` — reescribe `isPotentialNoShow` con lógica temporal (`isArrivalCalendarDay`, `isPrevCalendarDay`, `isAfterWarningHour`). Pasa `auditHour` a `getStayStatus`.
+- `apps/web/src/modules/rooms/components/timeline/TooltipPortal.tsx` — botón amber "↩ Revertir no-show" visible cuando `canRevert` (`differenceInHours(now, noShowAt) < 48`)
+
+**Backend:**
+- `apps/api/src/pms/guest-stays/guest-stays.service.ts` — guard en `markAsNoShow()` que lanza `ConflictException` si `checkinLocal === todayLocal && currentLocalHour < warningHour`. Usa `toLocalDate()` y `toLocalHour()` helpers existentes.
+
+---
+
+### TODO — Depósito en Garantía (Security Hold) — Sprint Futuro
+
+> **Decisión: no implementar hasta demanda confirmada.** Los primeros clientes de Zenix pueden no cobrar depósito, y hacerlo requerido sería una limitante de ventas.
+
+**Por qué es crítico para LATAM hostels:**
+- Sin registro en el sistema, el supervisor no puede cuadrar si los depósitos en caja coinciden con los check-ins del día
+- Muchos hostels usan voluntarios temporales — sin registro, el sistema no puede notificar: "Hoy hubo 8 check-ins con depósito de $100 c/u → debe haber $800 en caja"
+
+**Diseño técnico (cuando se implemente):**
+
+```prisma
+// En GuestStay:
+depositAmount       Decimal?       @map("deposit_amount") @db.Decimal(10,2)
+depositMethod       DepositMethod? @map("deposit_method")
+depositReturnedAt   DateTime?      @map("deposit_returned_at")
+depositReturnedById String?        @map("deposit_returned_by_id")
+
+// En PropertySettings:
+requiresSecurityDeposit Boolean  @default(false) @map("requires_security_deposit")
+defaultDepositAmount    Decimal? @map("default_deposit_amount") @db.Decimal(10,2)
+depositCurrency         String   @default("MXN") @map("deposit_currency")
+
+enum DepositMethod {
+  CASH        // efectivo retenido en caja
+  CARD_HOLD   // pre-autorización de tarjeta (sin cobro real)
+  NONE        // exento con razón
+}
+```
+
+*Control de caja (feature anti-robo):*
+- `GET /v1/cash-summary` debe incluir `depositsHeld` = suma de `depositAmount` de check-ins del día donde `depositMethod = CASH` y `depositReturnedAt = null`
+- Al hacer checkout con depósito cash, el recepcionista DEBE marcar `depositReturnedAt` + quién lo devolvió
+
+*UX en wizard de check-in:*
+- Step 3 agrega sección "Depósito en garantía" **solo si** `settings.requiresSecurityDeposit = true`
+- "Exentar depósito" requiere razón + código de manager (misma UX que COMP)
+- El depósito NO cuenta como pago del folio — es un concepto separado
+
+*¿Por qué `CARD_HOLD` NO crea un `PaymentLog`?*
+Un hold de tarjeta no es un ingreso (USALI 12ª ed.). Se registra en `GuestStay.depositMethod = CARD_HOLD` como intención; si se captura el hold al checkout, entonces sí se crea un `PaymentLog`.
+
+---
+
+## Sprint 9 Scope — Gestión de Tarifas + Channex.io
+
+> Este sprint es independiente y dedicado. No mezclar con Sprint 8.
 
 ### Objetivos
 
@@ -1879,3 +2186,715 @@ El módulo DayUse NO puede mezclarse con el calendario actual porque:
 - Tarifa por bloque de horas con reglas fiscales diferenciadas por país
 - Check-in/check-out en tiempo real (por hora, no por día)
 - Integración con el mismo módulo de Housekeeping (limpieza entre turnos)
+
+---
+
+## Análisis del Flujo No-Show — Cobertura Zenix vs Competencia
+
+> Perspectiva de ingeniero senior en procesos hoteleros. Fuentes: ISAHC, HFTP, Opera/Mews/Cloudbeds feature documentation, análisis de chargeback flows Visa/Mastercard para industria hotelera (LATAM).
+
+### El ciclo completo de un no-show (perspectiva operativa)
+
+En hotelería, un no-show no es un evento binario — es un **ciclo de 4 fases** con ventanas de acción y consecuencias distintas en cada una. La mayoría de los PMS del mercado solo cubren la Fase 3 (corte nocturno). Zenix cubre las 4.
+
+```
+FASE 1 (15:00–20:00)   FASE 2 (20:00–03:00)   FASE 3 (03:00 AM)      FASE 4 (post-48h)
+─────────────────────  ─────────────────────  ─────────────────────  ─────────────────────
+"El huésped no llegó"  "Alerta temprana"      "Night audit / corte"  "Registro inmutable"
+Bloque visible         Pre-arrival cron        Marca no-show          Fiscal + reportes
+                       WhatsApp automático     Libera inventario
+                       GuestContactLog         Cargo → pasarela
+```
+
+---
+
+### Fase 1 — 15:00 a 20:00: El huésped no llega (nadie lo sabe aún)
+
+**Operación hotelera real:** El check-in estándar es a las 15:00. Si a las 20:00 el huésped no ha llegado ni contactado, hay alta probabilidad de no-show. Este intervalo es crítico: es la última ventana donde el huésped puede confirmar llegada tardía sin consecuencias.
+
+**Zenix (§34):** El bloque permanece visible en el calendario con el color original. Ningún cambio de estado automático. El recepcionista sigue viendo la habitación como "reservada por llegar". Esto es correcto operativamente: cambiar el estado antes del corte nocturno causaría re-venta prematura y conflicto si el huésped llega a las 22:00.
+
+**Competencia:**
+- Opera Cloud, Mews, Cloudbeds: el bloque permanece visible pero **sin ningún mecanismo de alerta temprana**. El equipo de recepción descubre el no-show al día siguiente.
+- Clock PMS+: tiene "arrival alert" pero es manual — nadie lo activa sistemáticamente.
+- **Ningún PMS** del mercado tiene detección automática pre-audit en esta ventana.
+
+---
+
+### Fase 2 — 20:00: Pre-arrival warming (ventaja exclusiva Zenix)
+
+**Operación hotelera real:** En LATAM, el 60% de los no-shows son **llegadas tardías mal comunicadas** (Amadeus Hospitality Research 2022). El huésped tomó un vuelo retrasado, perdió la conexión, o simplemente olvidó avisar. Un mensaje proactivo a las 20:00 convierte potenciales no-shows en llegadas tardías — elimina el costo del cargo antes de que exista y protege la relación con el huésped.
+
+**Zenix:** `PotentialNoShowScheduler` evalúa cada estadía sin `actualCheckIn` a la hora configurable (default: 20:00 local). Por cada estadía en riesgo:
+
+1. Emite SSE `arrival:at_risk` → bloque recibe visual amber border en el calendario
+2. Si `PropertySettings.enableAutoOutreach = true`: envía WhatsApp vía 360Dialog + email vía Postmark automáticamente
+3. Registra **cada intento** en `GuestContactLog { stayId, channel, sentAt, messagePreview, sentById: null (sistema) }` — evidencia inmutable para disputas de chargeback
+
+**Ventaja técnica en LATAM:**
+- WhatsApp tiene >85% tasa de apertura en México, Colombia, Argentina (vs ~20% email)
+- `GuestContactLog` es exactamente la evidencia que Visa/Mastercard pide para rechazar un chargeback: "El establecimiento intentó contactar al titular a las 20:15 vía WhatsApp antes de aplicar el cargo de no-show"
+- El log es append-only — nunca se puede modificar ni eliminar. Cumple con los requisitos de evidencia de la Red de Pagos (Visa Core Rules §5.9.2)
+
+**Competencia:** Ningún PMS del mercado (Opera, Mews, Cloudbeds, Guesty, Hostaway) envía WhatsApp automático pre-audit. Solo email, y sin log de dispute-grade.
+
+---
+
+### Fase 3 — 03:00 AM: Night audit
+
+**Operación hotelera real:** El "night audit" es el cierre contable del día. En hotelería tradicional, un auditor nocturno revisa manualmente las llegadas pendientes y marca no-shows. Los PMS modernos automatizan esto con un cron job.
+
+| Sub-proceso | Zenix | Opera Cloud | Mews | Cloudbeds | Clock PMS+ |
+|-------------|-------|-------------|------|-----------|------------|
+| Auto-marca no-show | ✅ configurable | ✅ fijo 3 AM | ✅ | ✅ | ✅ |
+| Multi-timezone por propiedad | ✅ IANA real | ❌ server TZ | ❌ UTC | ❌ UTC | ❌ UTC |
+| Idempotencia (doble-proceso) | ✅ `noShowProcessedDate` | ❌ | ❌ | ❌ | ❌ |
+| Bloque visual diferenciado (NS) | ✅ rayas + badge | ✅ | ✅ | ⚠️ solo color | ✅ |
+| Libera inventario inmediato | ✅ `noShowAt: null` guard | ✅ | ✅ | ✅ | ✅ |
+| Push Channel Manager | ⚠️ stub Sprint 8C | ✅ | ✅ | ✅ | ✅ |
+| Cargo procesado automático | ❌ Sprint 8A | ✅ Stripe | ✅ Adyen | ⚠️ manual | ⚠️ manual |
+| Audit trail con actor | ✅ `noShowById` | ✅ | ✅ | ❌ | ⚠️ sin razón |
+| Reversión con actor | ✅ `noShowRevertedById` | ❌ | ✅ | ❌ | ⚠️ sin actor |
+| `waiveCharge` auditado | ✅ backend | ❌ | ❌ | ❌ | ❌ |
+| Cumplimiento fiscal LATAM (CFDI) | ✅ export CSV ready | ❌ | ❌ | ❌ | ❌ |
+
+**La ventaja más diferenciadora del mercado:** multi-timezone con `Intl.DateTimeFormat` por propiedad evaluado independientemente. Una cadena con hoteles en Cancún, Medellín y Madrid recibe el corte a las 2 AM de cada ciudad — sin configuración extra. Opera/Cloudbeds corren el audit a la misma hora UTC para todas las propiedades: en México eso puede ser las 8 PM, aún horario operativo. Esto es un bug documentado en foros de usuarios de Cloudbeds (Community thread "Night audit fires too early for Mexico properties", 2024).
+
+---
+
+### Fase 4 — Mañana: revertir, cobrar, o cerrar
+
+**Operación hotelera real:** Al día siguiente, el supervisor tiene tres decisiones:
+1. **Revertir** — el huésped llegó tarde, error del sistema, o disputa legítima
+2. **Cobrar** — aplicar el cargo de no-show a la tarjeta guardada
+3. **Perdonar** — huésped frecuente, fuerza mayor, política de cortesía
+
+**Zenix cubre:**
+- ✅ Reversión dentro de ventana de 48h con guard temporal (`differenceInHours(now, noShowAt) > 48 → ForbiddenException`)
+- ✅ Audit trail completo: `noShowRevertedAt`, `noShowRevertedById`, razón registrada
+- ✅ `waiveCharge` en backend con razón obligatoria → `noShowChargeStatus: WAIVED`
+- ❌ **GAP CRÍTICO Sprint 8A:** No hay pasarela de pago conectada. `noShowChargeStatus` tiene el ciclo de vida correcto pero `PENDING → CHARGED` no ejecuta ningún cobro real todavía
+- ⚠️ **GAP UI Sprint 8A:** Los botones "Cobrar" y "Perdonar cargo" no existen en `BookingDetailSheet`
+
+---
+
+### Fase 5 — Post-48h: registro inmutable y reportes fiscales
+
+**Operación hotelera real:** Después de 48h, el no-show es un hecho contable. El registro debe:
+- Estar disponible para auditoría fiscal (SAT México, DIAN Colombia, SUNAT Perú)
+- Ser la fuente de verdad para disputas de chargeback (hasta 120 días después del cargo en Visa/Mastercard)
+- Alimentar métricas de revenue management (tasa de no-show = KPI estándar de la industria)
+
+**Zenix:**
+- ✅ No hard-delete nunca. Anonimización GDPR de PII manteniendo registros fiscales
+- ✅ `GET /reports/no-shows` con export CSV: amounts, currency, timestamps, actores — listo para CFDI 4.0
+- ✅ `ReportsPage ?tab=noshow` con filtros por rango de fechas, canal, estado de cargo
+- ❌ **GAP UI Sprint 8B:** Toggle "Ocultar no-shows" del calendario — §34 lo documenta como necesario pero no implementado
+
+---
+
+### Resumen de cobertura actual
+
+| Paso del flujo | Estado | Sprint |
+|----------------|--------|--------|
+| Bloque visible al no llegar | ✅ | — |
+| Alerta visual amber a las 20:00 | ✅ | — |
+| WhatsApp/email automático pre-audit | ✅ (providers stub) | — |
+| GuestContactLog append-only | ✅ | — |
+| Night audit multi-timezone | ✅ | — |
+| Idempotencia `noShowProcessedDate` | ✅ | — |
+| Visual diferenciado (rayas + badge NS) | ✅ | — |
+| Libera inventario `noShowAt: null` | ✅ | — |
+| Push Channel Manager (Channex.io) | ⚠️ stub | 8C |
+| Cargo procesado automático (Stripe/Conekta) | ❌ | 8A |
+| UI "Cobrar cargo" en BookingDetailSheet | ❌ | 8A |
+| UI "Perdonar cargo" con razón | ❌ | 8A |
+| Reversión 48h con audit trail | ✅ | — |
+| waiveCharge backend | ✅ | — |
+| Filtro "Ocultar no-shows" en calendario | ❌ | 8B |
+| Registro inmutable post-48h | ✅ | — |
+| Reportes fiscales CSV (CFDI-ready) | ✅ | — |
+
+---
+
+### Ventajas competitivas exclusivas de Zenix
+
+**1. Pre-arrival warming a las 20:00 (ningún PMS lo tiene)**
+El ciclo tiene un paso extra que Opera, Mews, Cloudbeds y Clock PMS+ no implementan: detección temprana + outreach automático + registro de evidencia. El night audit es el último recurso, no el primero.
+
+**2. WhatsApp nativo LATAM vía 360Dialog**
+85% de tasa de apertura vs 20% email. El recepcionista no tiene que hacer nada — el sistema contacta al huésped automáticamente. El log queda en `GuestContactLog` como evidencia.
+
+**3. GuestContactLog como evidencia de disputa Visa/Mastercard**
+Log append-only con `channel`, `sentAt`, `messagePreview`, `sentById`. Cumple Visa Core Rules §5.9.2 para evidencia de contacto previo al cargo. Ningún PMS del mercado tiene este registro estructurado.
+
+**4. Multi-timezone real por propiedad**
+`Intl.DateTimeFormat` con IANA timezone evaluado independientemente por propiedad. Una cadena regional funciona desde el día 1. Opera/Cloudbeds tienen este bug documentado en producción.
+
+**5. Audit trail fiscal-grade con actores y razones**
+`noShowById`, `noShowRevertedById`, `noShowReason`, timestamps UTC. Exportable a CFDI 4.0 (MX), DIAN (CO), SUNAT (PE). Mews tiene audit trail pero sin cumplimiento LATAM. Opera tiene cumplimiento pero requiere ERP externo.
+
+**6. `noShowChargeStatus` enum con ciclo de vida fiscal explícito**
+`NOT_APPLICABLE → PENDING → CHARGED | FAILED | WAIVED`. Granularidad que no existe en Cloudbeds (boolean) ni Clock PMS+. Permite `SUM(amount) WHERE status = CHARGED` para revenue real vs `WAIVED` para cortesías auditadas.
+
+**7. Reversión con `waiveCharge` auditado**
+Mews tiene revert pero sin razón obligatoria ni cumplimiento fiscal LATAM post-revert. Zenix registra quién perdonó, cuándo, y por qué — evidencia ante una auditoría fiscal.
+
+---
+
+### Plan de Sprints pendientes del flujo no-show
+
+#### Sprint 8A — Payment processing (bloquea revenue real)
+**Prioridad: CRÍTICA** — sin esto, `noShowChargeStatus` queda en `PENDING` indefinidamente.
+
+| Tarea | Archivos | Esfuerzo |
+|-------|----------|----------|
+| Nuevo módulo `apps/api/src/payments/` con `PaymentService.chargeNoShow(stayId)` | `payments.service.ts`, `payments.module.ts` | 2 días |
+| Integración Stripe (internacional) o Conekta (MX: OXXO + tarjetas) | `stripe.provider.ts` / `conekta.provider.ts` | 1 día |
+| UI "💳 Procesar cargo $X MXN" en `BookingDetailSheet` | `BookingDetailSheet.tsx` | 0.5 día |
+| UI "🤝 Perdonar cargo + razón obligatoria" en `BookingDetailSheet` | `BookingDetailSheet.tsx` | 0.5 día |
+| Log en `StayJourney` cuando cargo es CHARGED/FAILED/WAIVED | `stay-journeys.service.ts` | 0.5 día |
+
+**Flujo:**
+```
+BookingDetailSheet (visible solo si noShowAt != null && chargeStatus == PENDING)
+├── [💳 Procesar cargo $X MXN]  → PaymentService.chargeNoShow()
+│     → noShowChargeStatus: CHARGED
+│     → StayJourneyEvent { type: 'CHARGE_PROCESSED', amount, currency }
+│     → toast "Cargo procesado ✓"
+└── [🤝 Perdonar cargo]         → input razón (obligatorio) → confirm
+      → noShowChargeStatus: WAIVED
+      → StayJourneyEvent { type: 'CHARGE_WAIVED', reason, staffId }
+      → toast "Cargo perdonado"
+```
+
+#### Sprint 8B — Filtro "Ocultar no-shows" en calendario
+**Prioridad: MEDIA** — operativa sin él, pero §34 lo requiere.
+
+| Tarea | Archivos | Esfuerzo |
+|-------|----------|----------|
+| Toggle button en `TimelineSubBar.tsx` | `TimelineSubBar.tsx` | 2h |
+| Estado en URL param `?hideNoShows=1` | `TimelineScheduler.tsx` | 1h |
+| Filtrar bloques con `noShowAt != null` en `BookingsLayer.tsx` | `BookingsLayer.tsx` | 1h |
+
+Default: visible (toggle OFF = mostrar todo). Patrón igual al de `?tab=` en DailyPlanningPage.
+
+#### Sprint 8C — Channex.io inventory push real
+**Prioridad: MEDIA** — bloquea cross-channel overbooking protection.
+
+`ChannexGateway.pushInventory()` es stub no-op. Cuando night audit libera un cuarto por no-show, el Channel Manager no recibe la actualización. Booking.com puede vender el cuarto antes de que Channex sincronice.
+
+Archivo: `apps/api/src/integrations/channex/channex.gateway.ts`. API documentada en §30.
+
+#### Sprint 8D — `animate-pulse` en `arrival:at_risk` (cosmético)
+**Prioridad: BAJA.** Reemplazar el amber border estático con `animate-pulse border-2 border-amber-400` + dot badge `⏰` top-right en `BookingBlock.tsx`.
+
+---
+
+## Sprint 7C — SSE Soft-Lock: Explicación Detallada
+
+### Contexto operativo hotelero
+
+En un hotel con recepción activa, es común que dos recepcionistas trabajen en turnos superpuestos o simultáneamente. Sin ningún mecanismo de coordinación, puede ocurrir este escenario:
+
+```
+Recepcionista A (turno día):          Recepcionista B (turno noche):
+10:55 — Abre BookingDetailSheet       10:55 — Abre BookingDetailSheet
+        para Hab. 205, busca           para Hab. 205, busca
+        disponibilidad del 25 al 28    disponibilidad del 25 al 28
+10:56 — Ve "disponible"               10:56 — Ve "disponible"
+10:57 — Confirma reserva Huésped A    10:57 — Confirma reserva Huésped B
+10:57 — ✅ checkAvailability pasa      10:57 — ❌ checkAvailability falla
+                                               (hard-block: 409 Conflict)
+                                       10:57 — "Error: habitación ocupada"
+                                               → confusión operativa
+```
+
+El hard-block de `checkAvailability` **previene el overbooking** — el segundo intento siempre falla. Pero la experiencia del usuario es confusa: el recepcionista B vio "disponible" hace 30 segundos y ahora recibe un error sin explicación. En un hotel con 15+ habitaciones y 2 recepcionistas, esto ocurre varias veces por semana.
+
+**El soft-lock resuelve la experiencia, no la seguridad.** La seguridad ya está resuelta por el hard-block.
+
+### Qué hace el soft-lock exactamente
+
+Cuando un recepcionista abre un diálogo de reserva o modificación para una habitación específica:
+
+1. El frontend llama `POST /v1/rooms/:id/soft-lock/acquire` → el servidor registra "Usuario X está gestionando Hab. 205, TTL: 90s"
+2. El servidor emite SSE `soft:lock:acquired { roomId, lockedByName, expiresAt }` a todos los clientes de esa propiedad
+3. **Otros recepcionistas** que estén mirando el calendario ven un badge visual sobre la habitación: `🔒 En uso por María G.`
+4. Cuando el recepcionista A termina (confirma o cancela), el frontend llama `DELETE /v1/rooms/:id/soft-lock` → SSE `soft:lock:released`
+5. El badge desaparece para todos
+
+### Por qué 90 segundos de TTL
+
+El TTL es un fallback para casos de crash o tab cerrada sin cleanup limpio. En condiciones normales, el lock se libera inmediatamente al cerrar el diálogo (cleanup del `useEffect`). Los 90s son el peor caso: si el navegador del recepcionista A muere sin ejecutar el cleanup, el lock expira solo en 90s — un tiempo corto para que el recepcionista B no se quede esperando sin información.
+
+### Por qué in-memory (sin Prisma)
+
+Los soft-locks son ephemeros por diseño. Persistirlos en la base de datos sería:
+- Innecesario: un lock de 90s no necesita sobrevivir un reinicio del servidor
+- Costoso: cada heartbeat (cada 30s) haría un UPDATE en Prisma
+- Complejo: necesitaría un scheduler de limpieza de locks expirados
+
+Un `Map<string, LockEntry>` en memoria del proceso NestJS es suficiente. Si el servidor reinicia, todos los locks desaparecen — los recepcionistas simplemente no verán el badge por un momento, y la protección real (hard-block) sigue intacta.
+
+### Componentes a implementar
+
+**Backend — nuevo módulo `apps/api/src/soft-lock/`:**
+
+```typescript
+// soft-lock.service.ts
+@Injectable()
+export class SoftLockService {
+  private locks = new Map<string, { userId: string; userName: string; expiresAt: Date }>()
+
+  acquire(roomId: string, userId: string, userName: string): 'acquired' | 'already_locked'
+  release(roomId: string, userId: string): void
+  heartbeat(roomId: string, userId: string): void   // renueva TTL a now + 90s
+  getStatus(roomId: string): { locked: boolean; byName?: string } | null
+  
+  @Cron('* * * * *')  // cada minuto
+  sweepExpired(): string[]  // retorna roomIds de locks expirados para emitir SSE released
+}
+```
+
+**Endpoints:**
+```
+POST   /v1/rooms/:id/soft-lock/acquire    → { acquired: true } | { acquired: false, lockedBy: 'María G.' }
+DELETE /v1/rooms/:id/soft-lock            → 204 No Content
+PATCH  /v1/rooms/:id/soft-lock/heartbeat  → 204 No Content
+```
+
+**SSE events en `packages/shared/src/types.ts`:**
+```typescript
+// Agregar a SseEventType:
+'soft:lock:acquired' | 'soft:lock:released'
+
+// Payload:
+interface SoftLockAcquiredEvent { roomId: string; lockedByName: string; expiresAt: string }
+interface SoftLockReleasedEvent { roomId: string }
+```
+
+**Frontend — `apps/web/src/hooks/useSoftLock.ts`:**
+```typescript
+export function useSoftLock(roomId: string | null) {
+  useEffect(() => {
+    if (!roomId) return
+    api.post(`/v1/rooms/${roomId}/soft-lock/acquire`)
+    const heartbeat = setInterval(() => {
+      api.patch(`/v1/rooms/${roomId}/soft-lock/heartbeat`)
+    }, 30_000)
+    return () => {
+      clearInterval(heartbeat)
+      api.delete(`/v1/rooms/${roomId}/soft-lock`)  // cleanup inmediato al cerrar
+    }
+  }, [roomId])
+}
+```
+
+**Visual en calendario:** Badge `🔒 [nombre truncado]` en amber en la fila de `RoomColumn` correspondiente a la habitación bloqueada. El bloque de reserva NO se deshabilita — el recepcionista B puede igualmente intentar la reserva; el badge es advertencia, no barrera.
+
+**Comportamiento con múltiples recepcionistas en la misma habitación:** El backend mantiene una sola entrada `Map<roomId, LockEntry>` por habitación. Si varios recepcionistas abren la misma habitación simultáneamente, cada `acquire` sobreescribe la entrada anterior — el badge muestra el nombre del último en adquirir. Todos los heartbeats renuevan el TTL independientemente. Esto es correcto por diseño: el objetivo del badge es comunicar "alguien está aquí", no listar a todos. Si recepcionistas A, B y C abren la misma habitación para fechas distintas, los tres pueden confirmar sin conflicto siempre que las fechas no se superpongan (el hard block los atrapa si sí).
+
+**Distinción por tipo de lock (fechas vs. habitación):** El lock es a nivel de `roomId`, no de rango de fechas. Un recepcionista 6 que abre la misma habitación que el 1 para fechas completamente distintas verá el badge pero su reserva no tiene impedimento real — `checkAvailability` confirmará disponibilidad en su rango y el servidor la creará sin conflicto. El soft-lock informa; el servidor decide.
+
+### Diferencia con un mutex real
+
+| Característica | Soft-Lock (Zenix) | Mutex real (DB pessimistic lock) |
+|----------------|-------------------|---------------------------------|
+| Previene overbooking | ❌ No (advisory) | ✅ Sí (bloqueante) |
+| UX cuando hay conflicto | ✅ Informativa | ❌ "Error 423 Locked" |
+| Requiere BD | ❌ In-memory | ✅ SELECT FOR UPDATE |
+| Funciona cross-servidor | ❌ Por proceso | ✅ Centralizado |
+| Complejidad | Baja | Alta |
+| Necesario en Zenix | Para UX | Ya cubierto por hard-block |
+
+---
+
+## Bitácora de Funcionalidades
+
+> Registro cronológico de todas las funcionalidades implementadas y en roadmap. Sirve como base para la documentación de usuario y el módulo de onboarding. Actualizar con cada sprint.
+
+### Leyenda
+- ✅ **Implementado** — en producción / listo para deploy
+- ⚠️ **Parcial** — backend listo, UI pendiente (o viceversa)
+- 🔄 **En progreso** — sprint actual
+- ⏳ **Planificado** — sprint asignado
+- 📋 **Roadmap** — sin sprint asignado aún
+- 🚫 **Descartado** — decisión definitiva
+
+---
+
+### Módulo: Housekeeping (Operaciones de Limpieza)
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| HK-01 | Planificación matutina de salidas (grid visual) | ✅ | Etapa 1 | Recepcionista | DailyPlanningPage tab 1 |
+| HK-02 | Marcado per-bed de checkout con urgencia | ✅ | Etapa 1 | Recepcionista | `hasSameDayCheckIn` per-task |
+| HK-03 | Confirmación de planificación (`batchCheckout`) | ✅ | Etapa 1 | Recepcionista | `POST /checkouts/batch` |
+| HK-04 | Confirmación de salida física por cama (`confirmDeparture`) | ✅ | Etapa 1 | Recepcionista | Fase 2 del flujo de 2 fases |
+| HK-05 | Reversión de salida física (`undoDeparture`) | ✅ | Etapa 1 | Recepcionista | Solo pre-limpieza |
+| HK-06 | Cancelación de checkout per-bed y per-checkout | ✅ | Etapa 1 | Recepcionista | Extensión de estadía |
+| HK-07 | Estado en Tiempo Real (tab 2 DailyPlanningPage) | ✅ | Etapa 1 | Recepcionista | SSE-driven |
+| HK-08 | Push notifications a housekeepers | ✅ | Etapa 1 | Sistema | Expo Push API |
+| HK-09 | Lista de tareas en mobile (app housekeeper) | ✅ | Etapa 1 | Housekeeper | `rooms.tsx` |
+| HK-10 | Ciclo de limpieza: start/pause/resume/end | ✅ | Etapa 1 | Housekeeper | `task/[id].tsx` |
+| HK-11 | Verificación de tareas por supervisor | ✅ | Etapa 1 | Supervisor | `POST /tasks/:id/verify` |
+| HK-12 | Cola offline en mobile (sync al reconectar) | ✅ | Etapa 1 | Housekeeper | `syncManager.ts` |
+| HK-13 | KanbanPage (board supervisor) | ⚠️ | Etapa 1 | Supervisor | Esqueleto — pendiente UI completa |
+| HK-14 | Asignación manual de tareas | ⚠️ | Etapa 1 | Supervisor | Backend OK, UI en KanbanPage pendiente |
+| HK-15 | Reportes de discrepancias (cama vs estado) | ⚠️ | Etapa 1 | Supervisor | Endpoint existe, UI de resolución pendiente |
+| HK-16 | Tareas stayover (limpieza de estadías largas) | 📋 | Roadmap P1 | Sistema | `StayoverService` — ver §Roadmap |
+| HK-17 | Checklists de limpieza por tipo de habitación | 📋 | Roadmap P2 | Housekeeper | Con fotos opcionales |
+| HK-18 | Auto-asignación por secciones (habitaciones fijas por housekeeper) | 📋 | Roadmap P3 | Sistema | |
+| HK-19 | Reporte de mantenimiento desde mobile | 📋 | Roadmap P7 | Housekeeper | Módulo Maintenance |
+
+---
+
+### Módulo: PMS — Calendario de Reservas
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| PMS-01 | Calendario tipo timeline (habitación × día) | ✅ | Sprint 6 | Recepcionista | `TimelineScheduler.tsx` |
+| PMS-02 | Bloques de reserva en grid con colores por OTA | ✅ | Sprint 6 | Recepcionista | `SOURCE_COLORS`, `OTA_ACCENT_COLORS` |
+| PMS-03 | Drag & drop de reservas entre habitaciones | ✅ | Sprint 7A | Recepcionista | `MoveRoomDialog` con confirmación |
+| PMS-04 | Extensión de estadía arrastrando borde derecho | ✅ | Sprint 7A | Recepcionista | `ExtendConfirmDialog` |
+| PMS-05 | Extensión con pricing aditivo (no recalculativo) | ✅ | Sprint 7A | Recepcionista | §22 decisión de diseño |
+| PMS-06 | Extensión en otra habitación (con auto-detect de conflicto) | ✅ | Sprint 7B | Recepcionista | Pre-flight check + selector de alternativas del mismo tipo |
+| PMS-07 | SSE Soft-Lock advisory (badge "en uso") | ✅ | Sprint 7C | Recepcionista | Badge 🔒 en RoomColumn; lock en CheckInDialog + BookingDetailSheet |
+| PMS-21 | Salida anticipada (early checkout manual) | ✅ | Sprint 7D | Recepcionista | `BookingDetailSheet.tsx`, `EarlyCheckoutDialog`, `POST /early-checkout` |
+| PMS-08 | Tooltip de reserva (flip top/bottom) | ✅ | Sprint 6 | Recepcionista | `TooltipPortal.tsx` |
+| PMS-09 | Panel de detalle de reserva 420px | ✅ | Sprint 6 | Recepcionista | `BookingDetailSheet.tsx` |
+| PMS-10 | Página de detalle completo de reserva | ✅ | Sprint 6 | Recepcionista | `ReservationDetailPage.tsx` |
+| PMS-11 | Ghost block para celdas vacías (nueva reserva) | ✅ | Sprint 7A | Recepcionista | `TimelineGrid.tsx` |
+| PMS-12 | Journey lines SVG (visualiza traslados de habitación) | ✅ | Sprint 6 | Recepcionista | `BookingsLayer.tsx` |
+| PMS-13 | Columna de hoy resaltada (emerald) | ✅ | Sprint 6 | Recepcionista | `TodayColumnHighlight.tsx` |
+| PMS-14 | Vista semana y mes con navegación | ✅ | Sprint 7A | Recepcionista | `TimelineSubBar.tsx` |
+| PMS-15 | Bloqueo visual de habitación ocupada durante drag | ✅ | Sprint 7A | Recepcionista | `DragGhost.tsx` con 🚫 |
+| PMS-16 | Split mid-stay con routing | ✅ | Sprint 7A | Recepcionista | `EXTENSION_NEW_ROOM` segment |
+| PMS-17 | Effective-date picker para traslados | ✅ | Sprint 7A | Recepcionista | `MoveRoomDialog.tsx` |
+| PMS-18 | Filtro "Ocultar no-shows" en calendario | ⏳ | Sprint 8B | Recepcionista | Toggle `?hideNoShows=1` |
+| PMS-19 | OccupancyFooter con colores por ocupación | ⏳ | Sprint 7A pendiente | Supervisor | ≥80% rojo, 50-79% amber, <50% emerald |
+| PMS-20 | Extender en otra propiedad (cadenas) | 📋 | Etapa 3 | Recepcionista | Cross-property inventory |
+
+---
+
+### Módulo: No-Shows y Gestión Fiscal
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| NS-01 | Marcar no-show manualmente (recepcionista) | ✅ | Sprint 5 | Recepcionista | `NoShowConfirmModal.tsx` |
+| NS-02 | Night audit automático multi-timezone | ✅ | Sprint 5 | Sistema | `NightAuditScheduler` |
+| NS-03 | Idempotencia del corte (`noShowProcessedDate`) | ✅ | Sprint 5 | Sistema | Guard anti-double-process |
+| NS-04 | Reversión de no-show (ventana 48h) | ✅ | Sprint 5 | Recepcionista/Supervisor | `revertNoShow` endpoint |
+| NS-05 | Bloque visual diferenciado (rayas + badge NS) | ✅ | Sprint 6 | Recepcionista | §34 — siempre visible |
+| NS-06 | Liberación inmediata de inventario | ✅ | Sprint 5 | Sistema | `noShowAt: null` en `checkAvailability` |
+| NS-07 | Pre-arrival warming (alerta 20:00 local) | ✅ | Sprint 5/6 | Sistema | `PotentialNoShowScheduler` |
+| NS-08 | Outreach automático WhatsApp + email | ✅ | Sprint 5/6 | Sistema | 360Dialog + Postmark (providers stub) |
+| NS-09 | GuestContactLog (log de intentos de contacto) | ✅ | Sprint 6 | Sistema | Append-only, evidencia Visa/MC |
+| NS-10 | Audit trail fiscal (`noShowById`, razón, timestamps) | ✅ | Sprint 5 | Sistema | Inmutable |
+| NS-11 | Reporte de no-shows con export CSV | ✅ | Sprint 5 | Supervisor/Contabilidad | CFDI-ready |
+| NS-12 | Cargo de no-show (procesamiento en pasarela) | ❌ | Sprint 8A | Supervisor | Stripe/Conekta — pendiente |
+| NS-13 | UI "Cobrar" y "Perdonar cargo" | ❌ | Sprint 8A | Supervisor | `BookingDetailSheet.tsx` |
+| NS-14 | Push Channel Manager al marcar no-show | ⚠️ | Sprint 8C | Sistema | `ChannexGateway` stub |
+| NS-15 | Filtro "Ocultar no-shows" en calendario | ❌ | Sprint 8B | Recepcionista | Toggle UI |
+| NS-16 | `animate-pulse` en bloque `arrival:at_risk` | ⏳ | Sprint 8D | Sistema | Mejora visual cosmética |
+| NS-17 | Ventana temporal de no-show (día hotelero real) | ✅ | Sprint 8F | Sistema/Recepcionista | `potentialNoShowWarningHour` + `noShowCutoffHour`; guard backend en `markAsNoShow()` |
+| NS-18 | Botón "Revertir no-show" en tooltip (< 48h) | ✅ | Sprint 8F | Recepcionista | Botón amber en `TooltipPortal` visible solo cuando `canRevert` (< 48h desde `noShowAt`) |
+
+---
+
+### Módulo: Check-in / Gestión de Huéspedes
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| CI-01 | Crear reserva desde calendario (ghost block) | ✅ | Sprint 7A | Recepcionista | `POST /v1/guest-stays` |
+| CI-02 | Verificar disponibilidad antes de crear reserva | ✅ | Sprint 6 | Sistema | `AvailabilityService` |
+| CI-03 | Check-out de estadía | ✅ | Sprint 6 | Recepcionista | `POST /v1/guest-stays/:id/checkout` |
+| CI-04 | Traslado de habitación mid-stay | ✅ | Sprint 7A | Recepcionista | `executeMidStayRoomMove` |
+| CI-05 | Historial de eventos de estadía (audit trail) | ✅ | Sprint 6 | Recepcionista | Tab "Historial" en `ReservationDetailPage` |
+| CI-06 | Integración Channex.io (webhooks OTA) | ⚠️ | Sprint 8C | Sistema | Gateway stub |
+| CI-07 | Rate plans configurables por habitación | ⏳ | Sprint 8 | Supervisor/Admin | |
+| CI-08 | Override manual de precio con razón auditada | ⏳ | Sprint 8 | Supervisor | `rateOverride` field |
+| CI-09 | Preferencias de limpieza del huésped (opt-in) | 📋 | Roadmap P6 | Huésped/Recepcionista | QR + web form |
+| CI-10 | Gestión de pagos en check-in (CASH/CARD/OTA/COMP) | ✅ | Sprint 8 | Recepcionista | `PaymentLog` append-only, `confirmCheckin` endpoint, split payment |
+| CI-11 | Confirmación manual de llegada (`actualCheckin`) | ✅ | Sprint 8 | Recepcionista | Status `UNCONFIRMED` → `IN_HOUSE`; `ConfirmCheckinDialog` 4 pasos |
+| CI-12 | Cash reconciliation por turno (anti-robo) | ✅ | Sprint 8 | Supervisor | `GET /cash-summary?date=X` agrupado por recepcionista |
+| CI-13 | Void de pagos (registro negativo, original intacto) | ✅ | Sprint 8 | Supervisor | `voidPayment()` — USALI 12ª ed. |
+| CI-14 | Captura de documento en check-in (tipo + número enmascarado) | ✅ | Sprint 8E | Recepcionista | `documentType`, `documentNumber` en `ConfirmCheckinDialog` Step 2 |
+| CI-15 | Tipo de llave entregada (`keyType`) | ✅ | Sprint 8E | Recepcionista | Selector pill 4 opciones, default PHYSICAL |
+| CI-16 | Notas de llegada (`arrivalNotes`) | ✅ | Sprint 8E | Recepcionista | Textarea en Step 1, visible en `ReservationDetailPage` |
+| CI-17 | Depósito en garantía (security hold) | 📋 | Roadmap | Recepcionista | Ver TODO en CLAUDE.md §Sprint 8E |
+
+---
+
+### Módulo: Notification Center
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| NC-01 | Panel de notificaciones (bell icon → slide-in) | ✅ | Sprint 7D | Todos | `NotificationPanel.tsx` — 3 secciones: urgente/acción/info |
+| NC-02 | Badge de no leídas en tiempo real (SSE) | ✅ | Sprint 7D | Todos | `notification:new` via SSE + React Query |
+| NC-03 | Marcar como leída (por notificación y todas) | ✅ | Sprint 7D | Todos | `markRead`, `markAllRead` con optimistic UI |
+| NC-04 | Notificaciones de aprobación inline (aprobar/rechazar) | ✅ | Sprint 7D | Supervisor | `APPROVAL_REQUIRED` con botones in-card |
+| NC-05 | Audit trail completo (quién leyó, quién aprobó, cuándo) | ✅ | Sprint 7D | Sistema | `AppNotificationRead`, `AppNotificationApproval` Prisma |
+| NC-06 | Auto-notificación en early checkout | ✅ | Sprint 7D | Sistema | `NotificationCenterService.send()` en `GuestStaysService` |
+| NC-07 | Auto-notificación en no-show | ✅ | Sprint 7D | Sistema | Notif. `ACTION_REQUIRED` al supervisor si hay cargo pendiente |
+| NC-08 | Endpoint de audit log | ✅ | Sprint 7D | Admin | `GET /v1/notification-center/audit` con rango de fechas |
+| NC-09 | Expiración automática de notificaciones | ✅ | Sprint 7D | Sistema | Campo `expiresAt` — excluidas del list después de vencidas |
+| NC-10 | Filtro de recipient (USER / ROLE / PROPERTY_ALL) | ✅ | Sprint 7D | Sistema | Cada notif. va al usuario correcto, no a todos |
+
+---
+
+### Módulo: Mantenimiento
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| MT-01 | Reporte de ticket desde mobile (housekeeper) | 📋 | Roadmap P7 | Housekeeper | Foto + categoría + descripción |
+| MT-02 | Kanban de tickets de mantenimiento (web) | 📋 | Roadmap P7 | Supervisor/Mantenimiento | |
+| MT-03 | Ciclo de vida de ticket (OPEN → RESOLVED → VERIFIED) | 📋 | Roadmap P7 | Mantenimiento | |
+| MT-04 | Badge "🔧 Mtto pendiente" en DailyPlanningGrid | 📋 | Roadmap P7 | Recepcionista | Comunicación HK ↔ Mantenimiento |
+| MT-05 | Foto antes/después de reparación | 📋 | Roadmap P7 | Mantenimiento | S3/Cloudinary upload |
+
+---
+
+### Módulo: Configuración y Administración
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| CFG-01 | Login / autenticación JWT | ✅ | Etapa 1 | Todos | `auth/` módulo |
+| CFG-02 | CRUD de habitaciones y camas | ✅ | Etapa 1 | Admin | `rooms/`, `beds/` |
+| CFG-03 | CRUD de staff (housekeepers, supervisores, recepcionistas) | ✅ | Etapa 1 | Admin | `staff/` |
+| CFG-04 | Configuración de propiedad (timezone, checkout time) | ✅ | Etapa 1 | Admin | `PropertySettings` |
+| CFG-05 | Configuración de hora de corte de no-shows (`noShowCutoffHour`) | ✅ | Sprint 5 | Admin | `PropertySettings` |
+| CFG-06 | Configuración de outreach automático (`enableAutoOutreach`) | ✅ | Sprint 5/6 | Admin | `PropertySettings` |
+| CFG-07 | Configuración de secciones de limpieza (housekeeper → habitaciones) | 📋 | Roadmap P3 | Admin | Auto-asignación |
+| CFG-08 | Configuración de checklists por tipo de habitación | 📋 | Roadmap P2 | Admin | |
+| CFG-09 | Configuración de rate plans | ⏳ | Sprint 8 | Admin | |
+
+---
+
+### Módulo: Reportes y Métricas
+
+| # | Funcionalidad | Estado | Sprint | Rol que lo usa | Notas |
+|---|---------------|--------|--------|----------------|-------|
+| RPT-01 | Métricas del día (ocupación, tareas completadas) | ✅ | Etapa 1 | Supervisor | `ReportsPage ?tab=housekeeping` |
+| RPT-02 | Reporte de no-shows con export CSV | ✅ | Sprint 5 | Supervisor/Contabilidad | `?tab=noshow` |
+| RPT-03 | Historial de checkouts | ✅ | Etapa 1 | Supervisor | `CheckoutsPage` |
+| RPT-04 | Discrepancias abiertas | ⚠️ | Etapa 1 | Supervisor | Lista existe, resolución pendiente |
+| RPT-05 | Métricas de rendimiento por housekeeper | 📋 | Roadmap P5 | Supervisor | Avg tiempo por habitación y tipo |
+| RPT-06 | Benchmarks de mercado por ciudad | 📋 | Sprint 9+ | Admin/Dirección | Data Network Effects |
+| RPT-07 | Revenue por canal (OTA vs directo) | ⏳ | Sprint 8 | Dirección | `GET /reports/revenue` |
+
+---
+
+## Estrategia de Documentación y Onboarding
+
+> La documentación se construye de forma incremental. Esta sección define la arquitectura del sistema de documentación — no la documentación en sí. El objetivo final es un módulo de onboarding in-app que cualquier recepcionista nuevo pueda completar en 20 minutos sin asistencia.
+
+### Principios de diseño de la documentación (Nielsen Norman Group, Apple HIG)
+
+1. **Progressive disclosure** — la documentación espeja la complejidad de la UI. El onboarding muestra primero lo que el usuario necesita el día 1; los flujos avanzados se presentan cuando el usuario los busca.
+2. **Task-based** — organizar por tarea operativa ("¿Cómo registro la salida de un huésped?"), no por módulo ("Módulo de Housekeeping — sección 3.2").
+3. **Mínimo de texto** — consistente con §13 (UX optimizada para la 100ª sesión). El onboarding usa GIFs/videos cortos + texto mínimo. Sin paredes de texto.
+4. **Contextual help** — los tooltips de ayuda aparecen solo cuando el usuario lo pide (icono `?`), nunca como overlay permanente.
+5. **Flujos, no features** — documentar "cómo hacer X" (flujo), no "qué hace el botón Y" (feature). El botón se entiende del label; el flujo requiere documentación.
+
+### Jerarquía de documentación
+
+```
+Nivel 1 — Onboarding in-app (Sprint 10+)
+  └── Guías interactivas dentro del propio sistema
+  └── Tooltips contextuales al primer uso de cada feature
+  └── Video demos de 60s por flujo principal
+
+Nivel 2 — Help center (Sprint 9+)
+  └── Base de conocimiento estructurada por rol y tarea
+  └── FAQs por módulo
+  └── Glosario hotelero (check-in, no-show, folio, etc.)
+
+Nivel 3 — Documentación técnica (continua)
+  └── CLAUDE.md (este archivo) — para el equipo de desarrollo
+  └── API docs (Swagger) — para integraciones
+  └── Guía de configuración inicial — para el propietario del hotel
+```
+
+### Bitácora de flujos a documentar (base para Nivel 1 y 2)
+
+Esta tabla es la fuente de verdad para el módulo de onboarding. Cada fila = una pantalla del onboarding o un artículo del help center.
+
+| Flujo | Rol | Complejidad | Prioridad doc | IDs relacionados |
+|-------|-----|-------------|---------------|-----------------|
+| Planificación matutina de salidas | Recepcionista | Baja | 🔴 Alta | HK-01, HK-02, HK-03 |
+| Confirmar salida física del huésped | Recepcionista | Baja | 🔴 Alta | HK-04 |
+| Revertir salida por error | Recepcionista | Media | 🟡 Media | HK-05 |
+| Cancelar checkout (extensión de estadía) | Recepcionista | Media | 🟡 Media | HK-06 |
+| Monitorear progreso de limpieza en tiempo real | Recepcionista/Supervisor | Baja | 🔴 Alta | HK-07 |
+| Iniciar y finalizar una tarea de limpieza (mobile) | Housekeeper | Baja | 🔴 Alta | HK-09, HK-10 |
+| Crear una reserva nueva desde el calendario | Recepcionista | Media | 🔴 Alta | PMS-01, CI-01, CI-02 |
+| Mover una reserva a otra habitación | Recepcionista | Media | 🟡 Media | PMS-03 |
+| Extender la estadía de un huésped | Recepcionista | Media | 🟡 Media | PMS-04, PMS-06 |
+| Marcar un no-show | Recepcionista | Alta | 🔴 Alta | NS-01 |
+| Revertir un no-show | Supervisor | Alta | 🟡 Media | NS-04 |
+| Cobrar/perdonar cargo de no-show | Supervisor | Alta | 🟡 Media | NS-12, NS-13 |
+| Ver historial completo de una reserva | Recepcionista | Baja | 🟢 Baja | CI-05 |
+| Asignar tarea a un housekeeper | Supervisor | Media | 🟡 Media | HK-14 |
+| Verificar tarea completada | Supervisor | Baja | 🟡 Media | HK-11 |
+| Interpretar el reporte de no-shows | Supervisor/Contabilidad | Media | 🟡 Media | NS-11, RPT-02 |
+| Configurar timezone de la propiedad | Admin | Baja | 🟢 Baja | CFG-04 |
+
+### Glosario hotelero (términos que deben aparecer en el onboarding)
+
+| Término | Definición operativa en Zenix |
+|---------|------------------------------|
+| **Check-out** | El huésped desocupa físicamente la habitación. En Zenix hay dos pasos: planificación AM y confirmación física. |
+| **No-show** | Huésped que no llegó en su fecha de check-in y no avisó. Genera un cargo según política de la propiedad. |
+| **Stayover** | Huésped que continúa hospedado (no hace check-out hoy). Su habitación también necesita limpieza. |
+| **DIRTY** | Estado de cama: el huésped salió y la cama necesita limpieza. |
+| **READY** | Estado de tarea: el housekeeper puede ir a limpiar. |
+| **PENDING_DEPARTURE** | El huésped todavía no sale físicamente — la tarea existe pero no se activa. |
+| **Urgente** | Una cama marcada "🔴 Hoy entra" — hay un nuevo huésped que llega el mismo día. Prioridad máxima. |
+| **Night Audit** | Proceso automático al cierre del día: marca no-shows, libera inventario, cierra el corte fiscal. |
+| **Folio** | Registro de todos los cargos acumulados de una estadía. |
+| **OTA** | Online Travel Agency — Booking.com, Airbnb, Expedia. Las reservas OTA entran por Channex. |
+| **Journey** | El recorrido completo de un huésped, incluyendo cambios de habitación y extensiones. |
+
+### Estructura propuesta del módulo de onboarding (Sprint 10+)
+
+```
+Onboarding (primera sesión del usuario)
+│
+├── [Paso 1] ¿Qué rol tienes? → Recepcionista / Housekeeper / Supervisor
+│
+├── [Camino Recepcionista]
+│   ├── Video 60s: "El día de un recepcionista en Zenix"
+│   ├── Tutorial interactivo: Planificar salidas del día (sandbox)
+│   ├── Tutorial interactivo: Confirmar salida física
+│   ├── Tutorial interactivo: Crear una reserva en el calendario
+│   └── Completado → badge + acceso a help center contextual
+│
+├── [Camino Housekeeper]
+│   ├── Video 60s: "Cómo usar la app en tu turno"
+│   ├── Tutorial interactivo: Ver mis tareas asignadas
+│   ├── Tutorial interactivo: Iniciar y finalizar limpieza
+│   └── Completado → acceso al turno
+│
+└── [Camino Supervisor]
+    ├── Video 60s: "Vista del supervisor en Zenix"
+    ├── Tutorial interactivo: Monitorear el tablero de tareas
+    ├── Tutorial interactivo: Verificar limpieza completada
+    ├── Tutorial interactivo: Interpretar reportes de no-shows
+    └── Completado → acceso a configuración avanzada
+```
+
+### Criterios de completitud para el módulo de onboarding
+
+Antes de construir el onboarding (Sprint 10+), deben estar completos:
+1. ✅ Flujos de Etapa 1 (Housekeeping) — completos
+2. ✅ Flujos PMS básicos (calendario, crear reserva, no-show) — completos
+3. ✅ Sprint 7B y 7C — completos
+4. ⏳ Sprint 8 (payments, Channex real) — pendiente
+5. 📋 KanbanPage completa para supervisores — pendiente
+6. 📋 Módulo de Mantenimiento MVP — pendiente
+
+El onboarding se construye cuando los flujos principales estén estables. Construirlo antes genera deuda de documentación (los tutoriales quedan desactualizados con cada cambio de UI).
+
+---
+
+## Arquitectura de Protección contra Overbooking
+
+> Referencia para el speech de ventas y para entender las capas de defensa del sistema.
+> El overbooking es el riesgo operativo más costoso de un PMS — una habitación vendida dos veces genera devoluciones, reubicaciones de emergencia y pérdida de reputación.
+
+### Las 3 capas de protección
+
+#### Capa 1 — Hard block transaccional ✅ Activo hoy
+
+Toda operación que crea o modifica una reserva (venga del recepcionista, de un webhook de OTA, o del night audit) pasa obligatoriamente por `checkAvailability` antes de escribir en base de datos.
+
+```
+¿Existe una estadía activa en roomId que se superponga con [from, to]
+y que NO sea un no-show (noShowAt: null)?
+  → Sí → 409 ConflictException — la operación se rechaza
+  → No → se confirma la reserva
+```
+
+**Quién gana:** el que confirma primero. PostgreSQL garantiza que dos transacciones simultáneas no pueden ambas pasar el check — una de ellas recibirá el conflicto. Esto aplica igualmente a reservas creadas por el recepcionista en Zenix y a webhooks de Channex (reservas de OTAs).
+
+**Consecuencia para el recepcionista:** recibe un mensaje de error con el nombre del huésped que ya ocupa la habitación y sus fechas. No hay overbooking silencioso.
+
+**Archivo clave:** `apps/api/src/pms/guest-stays/guest-stays.service.ts` → `checkAvailability()`
+
+#### Capa 2 — Channel Manager (Channex.io) ⚠️ Sprint 8C
+
+Esta capa cierra el gap de tiempo entre que Zenix confirma una reserva y que las OTAs actualizan su disponibilidad.
+
+```
+Recepcionista confirma reserva en Zenix
+        ↓
+checkAvailability pasa → reserva se guarda en BD
+        ↓
+AvailabilityService.notifyReservation() [fire-and-forget, fuera de tx]
+        ↓
+ChannexGateway.pushInventory(roomId, dates, allotment: 0)
+        ↓
+Channex.io actualiza Booking.com / Hostelworld / Airbnb en segundos
+        ↓
+La habitación desaparece de la disponibilidad en OTAs
+```
+
+Sin Sprint 8C, la Capa 1 sigue atrapando el segundo intento cuando el webhook de la OTA llega. Lo que cambia es **cuántos minutos la habitación aparece como disponible en OTAs antes del webhook**.
+
+**Política ante fallo de Channex:** fail-soft (best-effort). Si la red a Channex falla, la reserva local ya está commiteada — no se revierte. Se loguea para reintento manual. La Capa 1 sigue siendo la defensa final.
+
+**Archivo clave:** `apps/api/src/integrations/channex/channex.gateway.ts` (stub hoy)
+
+#### Capa 3 — SSE Soft-Lock intra-Zenix ✅ Activo (Sprint 7C)
+
+Protege únicamente el caso de dos recepcionistas del mismo hotel abriendo el mismo dialog simultáneamente. No tiene relación con OTAs.
+
+```
+Recepcionista A abre CheckInDialog para Hab. 205
+        ↓
+POST /v1/rooms/205/soft-lock/acquire → badge 🔒 "En uso por María G." para todos
+        ↓
+Recepcionista B ve el badge → espera o elige otra habitación
+        ↓
+Recepcionista A confirma → DELETE /v1/rooms/205/soft-lock → badge desaparece
+```
+
+**No es un hard block.** Si B ignora el badge e intenta confirmar, la Capa 1 lo rechazará. El soft-lock es UX, no seguridad.
+
+---
+
+### Escenario: recepcionista + Hostelworld simultáneos
+
+```
+T=0s   Recepcionista abre dialog → badge 🔒 (Capa 3, solo para otros Zenix users)
+T=0s   Huésped en Hostelworld ve habitación disponible
+
+--- Sin Sprint 8C activo ---
+T=30s  Recepcionista confirma → BD local OK → Channex no notificado
+T=60s  Huésped confirma en Hostelworld → webhook llega a Zenix
+T=60s  checkAvailability detecta conflicto → 409 → reserva Hostelworld rechazada ✅
+T=60s  Hostelworld marca la reserva como fallida → reintenta con otra hab. o notifica al huésped
+
+--- Con Sprint 8C activo ---
+T=30s  Recepcionista confirma → BD local OK → pushInventory a Channex (fire-and-forget)
+T=31s  Channex actualiza Hostelworld: allotment = 0
+T=32s  Habitación desaparece de Hostelworld
+T=60s  Huésped ya no puede confirmar — la habitación no aparece ✅
+```
+
+**Resultado en ambos casos:** no hay overbooking. La diferencia es la experiencia del huésped en Hostelworld (error post-confirmación vs. habitación que desaparece antes de que confirme).
+
+---
+
+### Para el speech de ventas
+
+**Hoy (pre-Sprint 8C):**
+> "Zenix tiene protección transaccional contra overbooking: toda reserva — venga del recepcionista o de una OTA — pasa por un hard check de disponibilidad antes de confirmarse. El primero que confirma gana. Si Booking.com intenta vender una habitación que ya confirmaste en Zenix, el sistema rechaza automáticamente la segunda reserva."
+
+**Post-Sprint 8C:**
+> "Zenix sincroniza el inventario en tiempo real con Channex.io, el mismo estándar de Opera Cloud y Mews. En cuanto confirmas una reserva, la disponibilidad se actualiza en todas tus OTAs — Booking.com, Hostelworld, Airbnb — en segundos. Dos capas de protección: sincronización preventiva en OTAs + hard block transaccional como defensa final."
+
+**Diferenciador de audit trail:**
+> "Si una OTA abre una disputa por una reserva rechazada, Zenix tiene el timestamp exacto de cuándo se confirmó la primera reserva, quién la creó, y el error 409 con causa específica. Ningún PMS entry-level tiene ese nivel de trazabilidad."

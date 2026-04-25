@@ -10,6 +10,9 @@ import {
 } from '@nestjs/common'
 import { IsBoolean, IsOptional, IsString } from 'class-validator'
 import { CreateContactLogDto } from './dto/create-contact-log.dto'
+import { ConfirmCheckinDto } from './dto/confirm-checkin.dto'
+import { RegisterPaymentDto } from './dto/register-payment.dto'
+import { VoidPaymentDto } from './dto/void-payment.dto'
 
 class MarkNoShowDto {
   @IsOptional()
@@ -38,6 +41,20 @@ export class GuestStaysController {
   @Post()
   create(@Body() dto: CreateGuestStayDto, @CurrentUser() actor: JwtPayload) {
     return this.service.create(dto, actor.sub)
+  }
+
+  /**
+   * GET /v1/guest-stays/cash-summary?propertyId=X&date=YYYY-MM-DD
+   * Reconciliación de caja de efectivo por turno.
+   * IMPORTANT: declarado antes de :id para evitar que NestJS lo resuelva como param.
+   */
+  @Get('cash-summary')
+  getCashSummary(
+    @Query('propertyId') propertyId: string,
+    @Query('date')       date:       string,
+  ) {
+    if (!propertyId || !date) throw new BadRequestException('propertyId y date son requeridos')
+    return this.service.getCashSummary(propertyId, date)
   }
 
   /**
@@ -92,6 +109,15 @@ export class GuestStaysController {
     return this.service.checkout(id, actor.sub)
   }
 
+  @Post(':id/early-checkout')
+  earlyCheckout(
+    @Param('id') id: string,
+    @Body() dto: { notes?: string },
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.earlyCheckout(id, actor.sub, dto.notes)
+  }
+
   @Patch(':id/extend')
   extendStay(
     @Param('id') id: string,
@@ -109,6 +135,46 @@ export class GuestStaysController {
     @CurrentUser() actor: JwtPayload,
   ) {
     return this.service.moveRoom(id, dto, actor.sub)
+  }
+
+  /**
+   * POST /v1/guest-stays/:id/confirm-checkin
+   * Confirma la llegada física del huésped y registra los pagos de ingreso.
+   */
+  @Post(':id/confirm-checkin')
+  confirmCheckin(
+    @Param('id') id: string,
+    @Body() dto: ConfirmCheckinDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.confirmCheckin(id, dto, actor.sub)
+  }
+
+  /**
+   * POST /v1/guest-stays/:id/payments
+   * Registra un pago adicional sobre una estadía (abono, cargo extra, etc.).
+   */
+  @Post(':id/payments')
+  registerPayment(
+    @Param('id') id: string,
+    @Body() dto: RegisterPaymentDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.registerPayment(id, dto, actor.sub)
+  }
+
+  /**
+   * POST /v1/guest-stays/payments/:paymentLogId/void
+   * Anula un PaymentLog (crea entrada negativa — original intacto).
+   * IMPORTANT: declarado antes de :id para evitar ambigüedad de routing.
+   */
+  @Post('payments/:paymentLogId/void')
+  voidPayment(
+    @Param('paymentLogId') paymentLogId: string,
+    @Body() dto: VoidPaymentDto,
+    @CurrentUser() actor: JwtPayload,
+  ) {
+    return this.service.voidPayment(paymentLogId, dto, actor.sub)
   }
 
   /**

@@ -1,4 +1,5 @@
 import { memo, useMemo, useRef } from 'react'
+import { startOfDay, addDays } from 'date-fns'
 import { Lock, Unlock, LogOut, UserX } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { STAY_STATUS_COLORS, OTA_ACCENT_COLORS, TIMELINE } from '../../utils/timeline.constants'
@@ -20,12 +21,16 @@ interface BookingBlockProps {
   onClick: () => void
   onCheckout?: (stayId: string) => void
   onNoShow?: (stayId: string) => void
+  onStartCheckin?: (stayId: string) => void
+  onRevertNoShow?: (stayId: string) => void
   isDragging?: boolean
   isLocked?: boolean
   onToggleLock?: (stayId: string) => void
   scrollLeft?: number
   dimmed?: boolean
   isInActiveJourney?: boolean
+  potentialNoShowWarningHour?: number
+  noShowCutoffHour?: number
 }
 
 const BLOCK_SHADOW = [
@@ -91,12 +96,16 @@ function BookingBlockInner({
   onClick,
   onCheckout,
   onNoShow,
+  onStartCheckin,
+  onRevertNoShow,
   isDragging = false,
   isLocked = false,
   onToggleLock,
   scrollLeft = 0,
   dimmed = false,
   isInActiveJourney = false,
+  potentialNoShowWarningHour,
+  noShowCutoffHour,
 }: BookingBlockProps) {
   const forceAbove = stay.hasMultipleSegments === true && stay.isLastSegment !== true
   const { triggerRef, registerTooltipRef, visible, position, hide } = useTooltip({ forceAbove })
@@ -130,7 +139,8 @@ function BookingBlockInner({
     return textOffset > 0 ? rect.width - textOffset : rect.width
   }, [rect.width, textOffset])
 
-  const rawStatus = getStayStatus(stay.checkIn, stay.checkOut, stay.actualCheckout)
+  const auditHour = noShowCutoffHour ?? 2
+  const rawStatus = getStayStatus(stay.checkIn, stay.checkOut, stay.actualCheckout, stay.actualCheckin, stay.noShowAt, auditHour)
   // If this segment has a successor (extension or room move), the guest is still in-house
   // even if checkOut = today — show IN_HOUSE (green) rather than DEPARTING (amber).
   const stayStatus = (rawStatus === 'DEPARTING' && stay.hasMultipleSegments && !stay.isLastSegment)
@@ -139,8 +149,21 @@ function BookingBlockInner({
   const isDeparting = stayStatus === 'DEPARTING'
   // Confirmed no-show: noShowAt is set
   const isConfirmedNoShow = !!stay.noShowAt
-  // Potential no-show: IN_HOUSE status but no confirmed no-show yet
-  const isPotentialNoShow = stayStatus === 'IN_HOUSE' && !stay.noShowAt
+  // Time-aware potential no-show: only after potentialNoShowWarningHour on arrival day,
+  // or in the early-AM window before night audit on the following calendar day.
+  const warningHour = potentialNoShowWarningHour ?? 20
+  const nowHour = new Date().getHours()
+  const todayStart = startOfDay(new Date())
+  const arrivalDayStart = startOfDay(stay.checkIn)
+  const isArrivalCalendarDay = arrivalDayStart.getTime() === todayStart.getTime()
+  const isPrevCalendarDay = arrivalDayStart.getTime() === startOfDay(addDays(new Date(), -1)).getTime()
+  const isAfterWarningHour =
+    (isArrivalCalendarDay && nowHour >= warningHour) ||
+    (isPrevCalendarDay && nowHour < auditHour)
+  const isPotentialNoShow =
+    (stayStatus === 'IN_HOUSE' || stayStatus === 'UNCONFIRMED') &&
+    !stay.noShowAt &&
+    isAfterWarningHour
   const colors = STAY_STATUS_COLORS[stayStatus as StayStatusKey]
   const otaAccent = OTA_ACCENT_COLORS[stay.source] ?? OTA_ACCENT_COLORS.other
   // Journey block flags: segments whose roomId can be reassigned via drag.
@@ -516,6 +539,8 @@ function BookingBlockInner({
         visible={visible}
         registerTooltipRef={registerTooltipRef}
         onNoShow={onNoShow ? (stayId) => { hide(); onNoShow(stayId) } : undefined}
+        onStartCheckin={onStartCheckin ? (stayId) => { hide(); onStartCheckin(stayId) } : undefined}
+        onRevertNoShow={onRevertNoShow ? (stayId) => { hide(); onRevertNoShow(stayId) } : undefined}
         isPotentialNoShow={isPotentialNoShow}
       />
     </>
@@ -540,5 +565,7 @@ export const BookingBlock = memo(BookingBlockInner, (prev, next) =>
   prev.scrollLeft === next.scrollLeft &&
   prev.dimmed === next.dimmed &&
   prev.staggerIndex === next.staggerIndex &&
-  prev.isInActiveJourney === next.isInActiveJourney,
+  prev.isInActiveJourney === next.isInActiveJourney &&
+  prev.potentialNoShowWarningHour === next.potentialNoShowWarningHour &&
+  prev.noShowCutoffHour === next.noShowCutoffHour,
 )

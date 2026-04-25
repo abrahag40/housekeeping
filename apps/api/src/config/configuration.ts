@@ -11,7 +11,4 @@ export default () => ({
   expo: {
     accessToken: process.env.EXPO_ACCESS_TOKEN ?? '',
   },
-  cloudbeds: {
-    webhookSecret: process.env.CLOUDBEDS_WEBHOOK_SECRET ?? '',
-  },
 })

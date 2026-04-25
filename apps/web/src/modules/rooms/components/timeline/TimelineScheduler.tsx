@@ -6,9 +6,12 @@ import { useTimelineStore } from '../../stores/timeline.store'
 import { TIMELINE } from '../../utils/timeline.constants'
 import { getStayStatus } from '../../utils/timeline.utils'
 import { useDragDrop } from '../../hooks/useDragDrop'
-import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useSplitMidStay, useSplitReservation, useMarkNoShow, useRevertNoShow, useRoomReadinessTasks, useExtendStay, useExtendSameRoom, useMoveExtensionRoom } from '../../hooks/useGuestStays'
+import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useSplitMidStay, useSplitReservation, useMarkNoShow, useRevertNoShow, useRoomReadinessTasks, useExtendStay, useExtendSameRoom, useExtendNewRoom, useMoveExtensionRoom, useConfirmCheckin } from '../../hooks/useGuestStays'
+import { guestStaysApi } from '../../api/guest-stays.api'
 import { useStayJourneys } from '../../hooks/useStayJourneys'
 import { useRoomSSE } from '../../hooks/useRoomSSE'
+import { useSoftLockSSE } from '@/hooks/useSoftLock'
+import { usePropertySettings } from '@/hooks/usePropertySettings'
 import { useDateVirtualizer } from '../../hooks/useDateVirtualizer'
 import { TimelineTopBar } from './TimelineTopBar'
 import { TimelineSubBar } from './TimelineSubBar'
@@ -28,6 +31,7 @@ import { MoveRoomDialog } from '../dialogs/MoveRoomDialog'
 import { MoveExtensionConfirmDialog } from '../dialogs/MoveExtensionConfirmDialog'
 import { MoveReservationConfirmDialog } from '../dialogs/MoveReservationConfirmDialog'
 import { NoShowConfirmModal } from './NoShowConfirmModal'
+import { ConfirmCheckinDialog } from '../dialogs/ConfirmCheckinDialog'
 import type {
   FlatRow,
   DropResult,
@@ -195,11 +199,13 @@ export function TimelineScheduler() {
   const moveRoomMut     = useMoveRoom(PROPERTY_ID)
   const splitMidStayMut = useSplitMidStay(PROPERTY_ID)
   const splitReservationMut = useSplitReservation(PROPERTY_ID)
-  const extendStayMut     = useExtendStay(PROPERTY_ID)
+  const extendStayMut        = useExtendStay(PROPERTY_ID)
   const extendSameRoomMut    = useExtendSameRoom(PROPERTY_ID)
+  const extendNewRoomMut     = useExtendNewRoom(PROPERTY_ID)
   const moveExtensionRoomMut = useMoveExtensionRoom(PROPERTY_ID)
   const markNoShowMut   = useMarkNoShow(PROPERTY_ID)
   const revertNoShowMut = useRevertNoShow(PROPERTY_ID)
+  const { potentialNoShowWarningHour, noShowCutoffHour } = usePropertySettings()
 
   const { journeyBlocks: rawJourneyBlocks } = useStayJourneys(PROPERTY_ID, dataWindow.from, dataWindow.to)
 
@@ -220,6 +226,12 @@ export function TimelineScheduler() {
 
   // SSE: real-time updates when room status changes
   useRoomSSE(PROPERTY_ID)
+
+  // Soft-lock state — Map<roomId, lockedByName> for 🔒 badge in RoomColumn.
+  // Populated via SSE events soft:lock:acquired / soft:lock:released.
+  // Using useState with functional setter avoids stale closures over the Map.
+  const [lockedRooms, setLockedRooms] = useState<Map<string, string>>(new Map())
+  useSoftLockSSE(setLockedRooms)
 
   // Room readiness tasks for visual indicators
   const { data: rawReadinessTasks = [] } = useRoomReadinessTasks(PROPERTY_ID)
@@ -321,6 +333,9 @@ export function TimelineScheduler() {
   }>({ open: false, stayId: null })
 
   const [noShowDialog, setNoShowDialog] = useState<{ stayId: string } | null>(null)
+
+  const [checkinDialog, setCheckinDialog] = useState<{ stayId: string } | null>(null)
+  const confirmCheckinMut = useConfirmCheckin(PROPERTY_ID)
   const noShowTarget = noShowDialog
     ? ([...stays, ...journeyBlocks].find((s) => s.id === noShowDialog.stayId) ?? null)
     : null
@@ -332,6 +347,8 @@ export function TimelineScheduler() {
     journeyId?: string
     originalCheckOut: Date
     newCheckOut: Date
+    roomConflict?: boolean
+    availableRooms?: import('../dialogs/ExtendConfirmDialog').RoomOption[]
   } | null>(null)
 
   // ─── Move room dialog ──────────────────────────────────────────
@@ -521,12 +538,46 @@ export function TimelineScheduler() {
         if (!prev) return null
         const added = differenceInCalendarDays(prev.previewCheckOut, prev.originalCheckOut)
         if (added >= 1) {
-          setExtendConfirm({
-            stayId: prev.stayId,
-            journeyId: prev.journeyId,
-            originalCheckOut: prev.originalCheckOut,
-            newCheckOut: prev.previewCheckOut,
-          })
+          const snap = { ...prev }
+          // Pre-flight: check if the original room is available for the extension dates.
+          // If the room has a conflict, offer alternative rooms with availability.
+          guestStaysApi.checkAvailability(snap.roomId, snap.originalCheckOut, snap.previewCheckOut)
+            .then((result) => {
+              if (result.available) {
+                setExtendConfirm({
+                  stayId: snap.stayId,
+                  journeyId: snap.journeyId,
+                  originalCheckOut: snap.originalCheckOut,
+                  newCheckOut: snap.previewCheckOut,
+                })
+              } else {
+                // Room unavailable — collect alternatives from flatRows and filter
+                // by same roomTypeId, excluding the conflicting room itself.
+                const conflictingRoomRow = flatRows.find(r => r.type === 'room' && r.id === snap.roomId)
+                const roomTypeId = conflictingRoomRow?.room?.roomTypeId
+                const alternatives = flatRows
+                  .filter(r => r.type === 'room' && r.id !== snap.roomId && (!roomTypeId || r.room?.roomTypeId === roomTypeId))
+                  .map(r => ({ id: r.id, number: r.room?.number ?? r.id, type: r.room?.roomTypeId ?? '' }))
+
+                setExtendConfirm({
+                  stayId: snap.stayId,
+                  journeyId: snap.journeyId,
+                  originalCheckOut: snap.originalCheckOut,
+                  newCheckOut: snap.previewCheckOut,
+                  roomConflict: true,
+                  availableRooms: alternatives,
+                })
+              }
+            })
+            .catch(() => {
+              // On network error, fall back to same-room extension and let the server validate.
+              setExtendConfirm({
+                stayId: snap.stayId,
+                journeyId: snap.journeyId,
+                originalCheckOut: snap.originalCheckOut,
+                newCheckOut: snap.previewCheckOut,
+              })
+            })
         }
         return null
       })
@@ -613,6 +664,7 @@ export function TimelineScheduler() {
               groups={groups}
               onToggleGroup={toggleGroup}
               readinessTasks={readinessTasks}
+              lockedRooms={lockedRooms}
             />
           </div>
 
@@ -726,6 +778,15 @@ export function TimelineScheduler() {
               onNoShow={(stayId) => {
                 setNoShowDialog({ stayId })
               }}
+              onStartCheckin={(stayId) => {
+                closeSheet()
+                setCheckinDialog({ stayId })
+              }}
+              onRevertNoShow={(stayId) => {
+                revertNoShowMut.mutate(stayId)
+              }}
+              potentialNoShowWarningHour={potentialNoShowWarningHour}
+              noShowCutoffHour={noShowCutoffHour}
               lockedStays={lockedStays}
               onToggleLock={toggleLock}
               scrollLeft={scrollLeft}
@@ -834,6 +895,11 @@ export function TimelineScheduler() {
         onRevertNoShow={(stayId) => {
           revertNoShowMut.mutate(stayId)
         }}
+        onStartCheckin={(stayId) => {
+          closeSheet()
+          setCheckinDialog({ stayId })
+        }}
+        propertyId={PROPERTY_ID}
       />
 
       <CheckInDialog
@@ -841,12 +907,36 @@ export function TimelineScheduler() {
         initialRoomId={checkInDialog.roomId}
         roomNumber={checkInDialog.roomNumber}
         initialCheckIn={checkInDialog.checkIn}
+        propertyId={PROPERTY_ID}
         onClose={() => setCheckInDialog({ open: false })}
         onConfirm={(data: NewStayData) => {
           createStay.mutate({ ...data, propertyId: PROPERTY_ID })
           setCheckInDialog({ open: false })
         }}
       />
+
+      {/* ─── Confirm check-in dialog (Sprint 8) ─────────────── */}
+      {checkinDialog && (() => {
+        const raw = [...stays, ...journeyBlocks].find(s => s.id === checkinDialog.stayId) ?? null
+        if (!raw) return null
+        const roomRow = flatRows.find(r => r.id === raw.roomId && r.type === 'room')
+        const stay = raw.roomNumber ? raw : { ...raw, roomNumber: roomRow?.room?.number }
+        return (
+          <ConfirmCheckinDialog
+            stay={stay}
+            roomLabel={stay.roomNumber ? `Hab. ${stay.roomNumber}` : 'Habitación'}
+            open={true}
+            onClose={() => setCheckinDialog(null)}
+            onConfirm={(data) => {
+              confirmCheckinMut.mutate(
+                { stayId: checkinDialog.stayId, data },
+                { onSettled: () => setCheckinDialog(null) },
+              )
+            }}
+            isPending={confirmCheckinMut.isPending}
+          />
+        )
+      })()}
 
       <CheckOutDialog
         stay={(() => {
@@ -881,8 +971,17 @@ export function TimelineScheduler() {
             currency={stay.currency}
             source={stay.source}
             otaName={stay.otaName}
-            isPending={extendStayMut.isPending || extendSameRoomMut.isPending}
+            roomConflict={extendConfirm.roomConflict}
+            availableRooms={extendConfirm.availableRooms}
+            isPending={extendStayMut.isPending || extendSameRoomMut.isPending || extendNewRoomMut.isPending}
             onClose={() => setExtendConfirm(null)}
+            onConfirmNewRoom={(newRoomId) => {
+              if (!extendConfirm.journeyId) return
+              extendNewRoomMut.mutate(
+                { journeyId: extendConfirm.journeyId, newRoomId, newCheckOut: extendConfirm.newCheckOut },
+                { onSettled: () => setExtendConfirm(null) },
+              )
+            }}
             onConfirm={() => {
               if (extendConfirm.journeyId) {
                 // Journey-aware path: creates EXTENSION_SAME_ROOM segment → +ext block appears

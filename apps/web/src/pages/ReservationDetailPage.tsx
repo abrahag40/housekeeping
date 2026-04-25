@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { format, differenceInDays, differenceInHours } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
@@ -19,6 +20,9 @@ import {
   Hash,
   Clock,
   AlertTriangle,
+  KeyRound,
+  Smartphone,
+  StickyNote,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -32,8 +36,20 @@ import {
 import { getStayStatus } from '../modules/rooms/utils/timeline.utils'
 import { PaymentStatusBadge } from '../modules/rooms/components/shared/PaymentStatusBadge'
 import { OTA_OPTIONS } from '../modules/rooms/components/dialogs/CheckInDialog'
+import { EarlyCheckoutDialog } from '../modules/rooms/components/dialogs/EarlyCheckoutDialog'
+import { useCheckout, useRevertNoShow, useEarlyCheckout } from '../modules/rooms/hooks/useGuestStays'
+import { KeyDeliveryType } from '@zenix/shared'
 import type { GuestStayDto } from '@zenix/shared'
 import type { PaymentStatus } from '../modules/rooms/types/timeline.types'
+
+// ─── Key delivery helpers ─────────────────────────────────────────────────────
+
+const KEY_LABELS: Record<KeyDeliveryType, string> = {
+  [KeyDeliveryType.PHYSICAL]: 'Llave física',
+  [KeyDeliveryType.CARD]:     'Tarjeta magnética',
+  [KeyDeliveryType.CODE]:     'Código PIN',
+  [KeyDeliveryType.MOBILE]:   'Acceso móvil',
+}
 
 // ─── Helper components ────────────────────────────────────────────────────────
 
@@ -84,12 +100,19 @@ function SectionCard({ children, className }: { children: React.ReactNode; class
 export function ReservationDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const qc = useQueryClient()
+  const [showCheckoutConfirm, setShowCheckoutConfirm] = useState(false)
+  const [showEarlyCheckout, setShowEarlyCheckout] = useState(false)
 
   const { data, isLoading, isError } = useQuery<GuestStayDto>({
     queryKey: ['guest-stay', id],
     queryFn: () => guestStaysApi.get(id!) as unknown as Promise<GuestStayDto>,
     enabled: !!id,
   })
+
+  const checkoutMutation  = useCheckout(data?.propertyId ?? '')
+  const revertMutation    = useRevertNoShow(data?.propertyId ?? '')
+  const earlyCheckoutMut  = useEarlyCheckout(data?.propertyId ?? '')
 
   if (isLoading) {
     return (
@@ -195,25 +218,70 @@ export function ReservationDetailPage() {
                   variant="outline"
                   size="sm"
                   className="text-xs border-amber-200 text-amber-700 hover:bg-amber-50"
-                  onClick={() => navigate('/pms')}
+                  disabled={revertMutation.isPending}
+                  onClick={() =>
+                    revertMutation.mutate(id!, {
+                      onSuccess: () =>
+                        qc.invalidateQueries({ queryKey: ['guest-stay', id] }),
+                    })
+                  }
                 >
                   <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                  Revertir no-show
+                  {revertMutation.isPending ? 'Revirtiendo…' : 'Revertir no-show'}
                 </Button>
               )}
-              {!isNoShow && (status === 'IN_HOUSE' || status === 'DEPARTING') && (
+
+              {/* DEPARTING: checkout en fecha programada con confirmación inline */}
+              {!isNoShow && status === 'DEPARTING' && (
+                showCheckoutConfirm ? (
+                  <div className="flex gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs"
+                      onClick={() => setShowCheckoutConfirm(false)}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="text-xs text-white bg-amber-600 hover:bg-amber-700"
+                      disabled={checkoutMutation.isPending}
+                      onClick={() =>
+                        checkoutMutation.mutate(id!, {
+                          onSuccess: () => {
+                            setShowCheckoutConfirm(false)
+                            qc.invalidateQueries({ queryKey: ['guest-stay', id] })
+                          },
+                        })
+                      }
+                    >
+                      <LogOut className="h-3.5 w-3.5 mr-1.5" />
+                      {checkoutMutation.isPending ? 'Procesando…' : 'Confirmar checkout'}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="text-xs text-white bg-amber-600 hover:bg-amber-700"
+                    onClick={() => setShowCheckoutConfirm(true)}
+                  >
+                    <LogOut className="h-3.5 w-3.5 mr-1.5" />
+                    Checkout
+                  </Button>
+                )
+              )}
+
+              {/* IN_HOUSE: salida anticipada (antes de la fecha programada) */}
+              {!isNoShow && status === 'IN_HOUSE' && (
                 <Button
                   size="sm"
-                  className={cn(
-                    'text-xs text-white',
-                    status === 'DEPARTING'
-                      ? 'bg-amber-600 hover:bg-amber-700'
-                      : 'bg-slate-800 hover:bg-slate-700',
-                  )}
-                  onClick={() => navigate('/pms')}
+                  variant="outline"
+                  className="text-xs border-amber-200 text-amber-700 hover:bg-amber-50"
+                  onClick={() => setShowEarlyCheckout(true)}
                 >
                   <LogOut className="h-3.5 w-3.5 mr-1.5" />
-                  {status === 'DEPARTING' ? 'Confirmar checkout' : 'Checkout'}
+                  Salida anticipada
                 </Button>
               )}
             </div>
@@ -284,6 +352,17 @@ export function ReservationDetailPage() {
             )}
             <InfoRow icon={Users}  label="Huéspedes" value={`${data.paxCount} pax`} />
             <InfoRow icon={Tag}    label="Canal de venta" value={otaName} />
+            {data.actualCheckin && (
+              <InfoRow icon={Clock} label="Check-in real"
+                value={format(new Date(data.actualCheckin), "dd/MM/yyyy HH:mm", { locale: es })} />
+            )}
+            {data.keyType && (
+              <InfoRow
+                icon={data.keyType === KeyDeliveryType.MOBILE ? Smartphone : KeyRound}
+                label="Acceso entregado"
+                value={KEY_LABELS[data.keyType as KeyDeliveryType]}
+              />
+            )}
           </SectionCard>
 
           <SectionCard>
@@ -296,8 +375,18 @@ export function ReservationDetailPage() {
 
           {data.notes && (
             <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
-              <div className="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1.5">Nota</div>
+              <div className="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1.5">Solicitudes especiales</div>
               <p className="text-sm text-amber-800">{data.notes}</p>
+            </div>
+          )}
+
+          {data.arrivalNotes && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                <StickyNote className="h-3 w-3" />
+                Notas de llegada
+              </div>
+              <p className="text-sm text-slate-700">{data.arrivalNotes}</p>
             </div>
           )}
 
@@ -387,8 +476,8 @@ export function ReservationDetailPage() {
               {
                 icon: FileText,
                 label: 'Documento',
-                value: data.documentType && data.documentNumber
-                  ? `${data.documentType.toUpperCase()} · ${data.documentNumber}`
+                value: data.documentType
+                  ? `${data.documentType.toUpperCase()}${data.documentNumber ? ` · ···${data.documentNumber.slice(-4)}` : ''}`
                   : null,
               },
             ]
@@ -457,6 +546,29 @@ export function ReservationDetailPage() {
           </p>
         </TabsContent>
       </Tabs>
+
+      {data && (status === 'IN_HOUSE') && (
+        <EarlyCheckoutDialog
+          open={showEarlyCheckout}
+          onClose={() => setShowEarlyCheckout(false)}
+          onConfirm={(notes) => {
+            earlyCheckoutMut.mutate(
+              { stayId: id!, notes },
+              {
+                onSuccess: () => {
+                  setShowEarlyCheckout(false)
+                  qc.invalidateQueries({ queryKey: ['guest-stay', id] })
+                },
+              },
+            )
+          }}
+          isPending={earlyCheckoutMut.isPending}
+          guestName={data.guestName}
+          roomLabel={data.room?.number ? `Hab. ${data.room.number}` : 'Habitación'}
+          checkinAt={new Date(data.checkinAt)}
+          scheduledCheckout={new Date(data.scheduledCheckout)}
+        />
+      )}
     </div>
   )
 }

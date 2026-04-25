@@ -18,7 +18,7 @@ import { ConfigService } from '@nestjs/config'
 //   POST /v1/restrictions                                      (stop-sell, MLOS) — stub
 //
 // Webhooks inbound (booking_new, booking_modify, booking_cancel):
-//   Consumidos en /api/webhooks/channex (integrations/cloudbeds — ver Sprint 8).
+//   Consumidos en /api/webhooks/channex (ver Sprint 8).
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 

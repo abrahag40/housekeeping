@@ -32,6 +32,7 @@ export interface GuestStayBlock {
   paxCount: number
   notes?: string
   isLocked?: boolean
+  actualCheckin?: Date
   actualCheckout?: Date
   noShowAt?: Date
   noShowFeeAmount?: number
@@ -73,7 +74,7 @@ export type RoomStatus =
 export type PaymentStatus =
   | 'PENDING' | 'PARTIAL' | 'PAID' | 'CREDIT' | 'OVERDUE'
 
-export type StayStatus = 'ARRIVING' | 'IN_HOUSE' | 'DEPARTING' | 'DEPARTED'
+export type StayStatus = 'ARRIVING' | 'UNCONFIRMED' | 'IN_HOUSE' | 'DEPARTING' | 'DEPARTED' | 'NO_SHOW'
 
 export type ViewMode = 'week' | 'month' | 'quarter'
 

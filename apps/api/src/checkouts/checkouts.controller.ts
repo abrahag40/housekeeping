@@ -6,7 +6,6 @@ import { TenantResource } from '../common/guards/tenant.guard'
 import { CheckoutsService } from './checkouts.service'
 import { CreateCheckoutDto, BatchCheckoutDto } from './dto/create-checkout.dto'
 import { CancelCheckoutDto } from './dto/cancel-checkout.dto'
-import { CheckoutSource } from '@zenix/shared'
 
 @Controller()
 export class CheckoutsController {
@@ -20,7 +19,7 @@ export class CheckoutsController {
       roomId: dto.roomId,
       guestName: dto.guestName,
       actualCheckoutAt: dto.actualCheckoutAt ? new Date(dto.actualCheckoutAt) : new Date(),
-      source: CheckoutSource.MANUAL,
+      source: 'MANUAL',
       isEarlyCheckout: dto.isEarlyCheckout,
       hasSameDayCheckIn: dto.hasSameDayCheckIn,
       notes: dto.notes,

@@ -1,35 +1,28 @@
 /**
- * CheckoutsService — Núcleo del sistema de housekeeping.
+ * CheckoutsService — Núcleo del módulo de Housekeeping.
  *
- * Este servicio es el punto de entrada unificado para TODOS los checkouts,
- * independientemente de su origen:
+ * Módulo independiente. Se comunica con otros módulos ÚNICAMENTE vía:
+ *  - SSE (NotificationsService.emit) para el dashboard web
+ *  - Push notifications (PushService) para la app móvil del housekeeper
+ *  - EventEmitter2 para eventos internos (@OnEvent en otros módulos)
  *
- *  1. Manual (recepción en DailyPlanningPage o CheckoutsPage)
- *     → POST /checkouts/batch  (planning matutino — múltiples habitaciones a la vez)
- *     → POST /checkouts        (checkout individual ad-hoc)
- *
- *  2. Automático (webhook CloudBeds PMS)
- *     → POST /webhooks/cloudbeds → CheckoutsService.processCheckout()
+ * Fuentes de checkout:
+ *  1. Manual — POST /checkouts/batch (planning matutino) o POST /checkouts (ad-hoc)
+ *  2. Evento externo — @OnEvent('checkout.requested') para integraciones futuras (sin acoplamiento directo)
  *
  * Flujo de processCheckout():
- *  1. Idempotency check (cloudbedsReservationId) — evita duplicados por retries del webhook.
- *  2. Obtener room + units + property en una sola query (evita N+1).
- *  3. Determinar prioridad: URGENT si hay check-in el mismo día, MEDIUM en caso contrario.
- *  4. $transaction atómica:
+ *  1. Obtener room + units + property en una sola query (evita N+1).
+ *  2. Determinar prioridad: URGENT si hay check-in el mismo día, MEDIUM en caso contrario.
+ *  3. $transaction atómica:
  *     a. Crear registro Checkout.
  *     b. Por cada unit: activar tarea PENDING→READY si había pre-asignación, o crear UNASSIGNED.
  *     c. Actualizar unit.status → DIRTY para reflejar el estado físico real.
- *  5. Post-transaction: push a camareras + SSE al dashboard web.
- *     (Fuera de la transacción para que un fallo de push no revierta el checkout persistido.)
+ *  4. Post-transaction: push a camareras + SSE al dashboard web.
  *
  * Máquina de estados de CleaningTask relevante a este módulo:
  *  PENDING  → READY      (checkout activa pre-asignación cuando el huésped sale)
  *  (nueva)  → UNASSIGNED (checkout crea tarea sin asignar si no hay pre-asignación)
  *  READY / UNASSIGNED / PENDING → CANCELLED (cancelCheckout cuando huésped extiende estadía)
- *
- * Regla de modelo: UN checkout corresponde a UNA habitación, pero genera MÚLTIPLES
- * CleaningTasks (una por unidad). Esto es esencial en dormitorios compartidos donde cada
- * unidad puede estar asignada a una camarera diferente y limpiarse de forma independiente.
  */
 import {
   BadRequestException,
@@ -39,27 +32,22 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
-import { CheckoutSource, CleaningStatus, Priority, TaskLogEvent } from '@zenix/shared'
+import { CleaningStatus, Priority, TaskLogEvent } from '@zenix/shared'
 import { PrismaService } from '../prisma/prisma.service'
 import { TenantContextService } from '../common/tenant-context.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { PushService } from '../notifications/push.service'
 import { CreateCheckoutDto, BatchCheckoutDto } from './dto/create-checkout.dto'
 
-/**
- * Input normalizado que ambas fuentes (manual + webhook) convierten a este formato
- * antes de llamar a processCheckout()
- */
 export interface CheckoutInput {
   roomId: string
   guestName?: string
   actualCheckoutAt: Date
-  source: CheckoutSource
-  cloudbedsReservationId?: string  // Solo para checkouts de CloudBeds (idempotency key)
+  source: 'MANUAL' | 'SYSTEM'
   isEarlyCheckout?: boolean
-  hasSameDayCheckIn?: boolean      // true → prioridad URGENT en la tarea de limpieza
-  notes?: string                   // Notas de recepción visibles al housekeeper
-  enteredById?: string             // Staff que registró el checkout (para auditoría)
+  hasSameDayCheckIn?: boolean
+  notes?: string
+  enteredById?: string
 }
 
 @Injectable()
@@ -94,17 +82,6 @@ export class CheckoutsService {
   async processCheckout(input: CheckoutInput) {
     const orgId = this.tenant.getOrganizationId()
 
-    // Idempotency: skip if already processed (CloudBeds webhook retry)
-    if (input.cloudbedsReservationId) {
-      const existing = await this.prisma.checkout.findUnique({
-        where: { cloudbedsReservationId: input.cloudbedsReservationId },
-      })
-      if (existing) {
-        this.logger.debug(`Checkout already processed: ${input.cloudbedsReservationId}`)
-        return existing
-      }
-    }
-
     const room = await this.prisma.room.findUnique({
       where: { id: input.roomId, organizationId: orgId },
       include: { units: true, property: true },
@@ -122,7 +99,6 @@ export class CheckoutsService {
           guestName: input.guestName,
           actualCheckoutAt: input.actualCheckoutAt,
           source: input.source,
-          cloudbedsReservationId: input.cloudbedsReservationId,
           isEarlyCheckout: input.isEarlyCheckout ?? false,
           hasSameDayCheckIn: input.hasSameDayCheckIn ?? false,
           notes: input.notes,
@@ -260,7 +236,7 @@ export class CheckoutsService {
             organizationId: orgId,
             roomId,
             actualCheckoutAt: checkoutDate,
-            source: CheckoutSource.MANUAL,
+            source: 'MANUAL',
             hasSameDayCheckIn,
             notes: notes || undefined,
             enteredById,
@@ -614,7 +590,7 @@ export class CheckoutsService {
     await this.dispatchNotifications(checkoutId, propertyId, {
       roomId: checkout.roomId,
       actualCheckoutAt: new Date(),
-      source: CheckoutSource.MANUAL,
+      source: 'MANUAL',
       hasSameDayCheckIn: checkout.hasSameDayCheckIn,
       enteredById: actorId,
     })

@@ -17,14 +17,9 @@
  *
  * ## How Competitors Handle This
  *
- * Research findings (CloudBeds, Mews, Beds24, Little Hotelier, Sirvoy):
+ * Research findings (Mews, Beds24, Little Hotelier, Sirvoy):
  *
- * 1. **CloudBeds**: Has a "Room Move" feature in the reservation panel that
- *    lets reception drag a booking to a different room/bed. No housekeeper-side
- *    discrepancy report. Reception must catch mismatches manually via the
- *    occupancy grid.
- *
- * 2. **Mews**: Offers "Space Move" in the timeline view — a receptionist can
+ * 1. **Mews**: Offers "Space Move" in the timeline view — a receptionist can
  *    drag reservations across room/bed slots. Housekeeping assignments update
  *    automatically. No mobile "guest moved" report from housekeepers.
  *
@@ -68,7 +63,7 @@
  * 1. Housekeeper reports → status = OPEN (SSE fires)
  * 2. Reception sees banner → reviews beds in /rooms or /discrepancies
  * 3. Reception calls or checks physically, then does one of:
- *    a. Room-move in PMS (CloudBeds/Mews) → re-syncs bed state
+ *    a. Room-move in PMS (Mews/Zenix) → re-syncs bed state
  *    b. Manual checkout + re-assign → corrects the system
  * 4. Reception clicks "Resolver" on /discrepancies, optionally adding a
  *    resolution note → status = RESOLVED

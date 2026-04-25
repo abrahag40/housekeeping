@@ -88,8 +88,6 @@ async function main() {
       type: 'HOTEL',
       region: 'Riviera Maya',
       city: 'Tulum',
-      checkinTime: '15:00',
-      checkoutTime: '12:00',
     },
   })
   const cancun = await prisma.property.upsert({
@@ -102,8 +100,6 @@ async function main() {
       type: 'HOTEL',
       region: 'Zona Hotelera Cancún',
       city: 'Cancún',
-      checkinTime: '15:00',
-      checkoutTime: '12:00',
     },
   })
   console.log(`✅ Properties: ${tulum.name}, ${cancun.name}`)
@@ -280,7 +276,7 @@ async function main() {
   }
 
   // 7. TULUM GUEST DATA — run the SQL fixture ──────────────────────────────
-  const sqlPath = path.join(__dirname, 'seed_hotel_tulum_v4.sql')
+  const sqlPath = path.join(__dirname, 'seed_hotel_tulum_v5.sql')
   if (fs.existsSync(sqlPath)) {
     const sql = fs.readFileSync(sqlPath, 'utf8')
     console.log(`\n🏖  Loading Hotel Tulum fixture (${sql.length.toLocaleString()} chars)…`)
@@ -300,7 +296,7 @@ async function main() {
 
   // 8. CANCÚN GUEST DATA — run the SQL fixture ─────────────────────────────
 
-  const sqlCancunPath = path.join(__dirname, 'seed_hotel_cancun_v2.sql')
+  const sqlCancunPath = path.join(__dirname, 'seed_hotel_cancun_v3.sql')
   if (fs.existsSync(sqlCancunPath)) {
     const sqlCancun = fs.readFileSync(sqlCancunPath, 'utf8')
     console.log(`\n🏙  Loading Hotel Cancún fixture (${sqlCancun.length.toLocaleString()} chars)…`)

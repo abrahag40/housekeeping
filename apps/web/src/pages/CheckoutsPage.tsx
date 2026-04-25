@@ -107,9 +107,6 @@ export function CheckoutsPage() {
                     {c.hasSameDayCheckIn && (
                       <span className="bg-red-50 text-red-600 px-1.5 py-0.5 rounded">🔴 Check-in hoy</span>
                     )}
-                    {c.source === 'CLOUDBEDS' && (
-                      <span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">PMS</span>
-                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`text-xs ${c.cancelled ? 'text-gray-400' : 'text-green-600'}`}>

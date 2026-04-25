@@ -41,6 +41,7 @@ function adaptStay(raw: Record<string, unknown>): GuestStayBlock {
     pmsReservationId: raw.pmsReservationId as string | undefined,
     notes:            raw.notes as string | undefined,
     isLocked:         false,
+    actualCheckin:    raw.actualCheckin ? new Date(raw.actualCheckin as string) : undefined,
     actualCheckout:   raw.actualCheckout ? new Date(raw.actualCheckout as string) : undefined,
     noShowAt:             raw.noShowAt ? new Date(raw.noShowAt as string) : undefined,
     noShowFeeAmount:      raw.noShowFeeAmount != null ? Number(raw.noShowFeeAmount) : undefined,
@@ -160,6 +161,11 @@ export function useCreateGuestStay(propertyId: string) {
           q.queryKey[0] === 'guest-stays' && q.queryKey[1] === propertyId,
       })
       qc.invalidateQueries({
+        queryKey: ['stay-journeys-timeline', propertyId],
+        exact: false,
+        refetchType: 'active',
+      })
+      qc.invalidateQueries({
         predicate: (q) =>
           q.queryKey[0] === 'rooms' && q.queryKey[1] === propertyId,
       })
@@ -179,6 +185,30 @@ export function useCheckout(propertyId: string) {
         refetchType: 'active',
       })
       qc.invalidateQueries({ queryKey: ['rooms', propertyId], exact: false })
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo realizar el checkout')
+    },
+  })
+}
+
+export function useEarlyCheckout(propertyId: string) {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ stayId, notes }: { stayId: string; notes?: string }) =>
+      guestStaysApi.earlyCheckout(stayId, notes),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      qc.invalidateQueries({ queryKey: ['rooms', propertyId], exact: false })
+      const msg =
+        result.tasksScheduledFor === 'tomorrow'
+          ? 'Salida anticipada registrada — limpieza programada para mañana'
+          : 'Salida anticipada registrada — limpieza disponible para hoy'
+      toast.success(msg)
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo registrar la salida anticipada')
     },
   })
 }
@@ -279,6 +309,25 @@ export function useExtendSameRoom(propertyId: string) {
   })
 }
 
+/** Extension into a different room when the original is unavailable for the new dates.
+ *  Creates EXTENSION_NEW_ROOM segment + room-change cleaning tasks. */
+export function useExtendNewRoom(propertyId: string) {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ journeyId, newRoomId, newCheckOut }: { journeyId: string; newRoomId: string; newCheckOut: Date }) =>
+      guestStaysApi.extendNewRoom(journeyId, newRoomId, newCheckOut),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      qc.invalidateQueries({ queryKey: ['stay-journeys-timeline', propertyId], exact: false, refetchType: 'active' })
+      toast.success('Estadía extendida en otra habitación')
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo extender en otra habitación')
+    },
+  })
+}
+
 /** Mid-stay room move for IN_HOUSE guests. Routes to stay-journeys endpoint which
  *  creates a ROOM_MOVE segment preserving the StayJourney audit trail. */
 export function useSplitMidStay(propertyId: string) {
@@ -354,6 +403,28 @@ export function useSplitReservation(propertyId: string) {
     },
     onError: (err: Error) => {
       toast.error(err.message ?? 'No se pudo dividir la reserva')
+    },
+  })
+}
+
+export function useConfirmCheckin(propertyId: string) {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      stayId,
+      data,
+    }: {
+      stayId: string
+      data: Parameters<typeof guestStaysApi.confirmCheckin>[1]
+    }) => guestStaysApi.confirmCheckin(stayId, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      qc.invalidateQueries({ queryKey: ['stay-journeys-timeline', propertyId], exact: false, refetchType: 'active' })
+      toast.success('Check-in confirmado — el huésped está en casa')
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? 'No se pudo confirmar el check-in')
     },
   })
 }

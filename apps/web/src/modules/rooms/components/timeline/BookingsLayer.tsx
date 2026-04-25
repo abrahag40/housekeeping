@@ -17,6 +17,10 @@ interface BookingsLayerProps {
   onStayClick: (stayId: string) => void
   onCheckout: (stayId: string) => void
   onNoShow?: (stayId: string) => void
+  onStartCheckin?: (stayId: string) => void
+  onRevertNoShow?: (stayId: string) => void
+  potentialNoShowWarningHour?: number
+  noShowCutoffHour?: number
   lockedStays?: Set<string>
   onToggleLock?: (stayId: string) => void
   scrollLeft?: number
@@ -108,6 +112,10 @@ export function BookingsLayer({
   onStayClick,
   onCheckout,
   onNoShow,
+  onStartCheckin,
+  onRevertNoShow,
+  potentialNoShowWarningHour,
+  noShowCutoffHour,
   lockedStays,
   onToggleLock,
   scrollLeft = 0,
@@ -347,6 +355,10 @@ export function BookingsLayer({
             onClick={() => handleBlockClickCb(stay)}
             onCheckout={onCheckout}
             onNoShow={onNoShow}
+            onStartCheckin={onStartCheckin}
+            onRevertNoShow={onRevertNoShow}
+            potentialNoShowWarningHour={potentialNoShowWarningHour}
+            noShowCutoffHour={noShowCutoffHour}
             isLocked={lockedStays?.has(stay.id)}
             onToggleLock={onToggleLock}
             scrollLeft={scrollLeft}
@@ -373,6 +385,10 @@ export function BookingsLayer({
             onClick={() => handleBlockClickCb(stay)}
             onCheckout={onCheckout}
             onNoShow={onNoShow}
+            onStartCheckin={onStartCheckin}
+            onRevertNoShow={onRevertNoShow}
+            potentialNoShowWarningHour={potentialNoShowWarningHour}
+            noShowCutoffHour={noShowCutoffHour}
             isLocked={lockedStays?.has(stay.id)}
             onToggleLock={onToggleLock}
             scrollLeft={scrollLeft}

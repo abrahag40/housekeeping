@@ -25,7 +25,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common'
 import { Test, TestingModule } from '@nestjs/testing'
 import { EventEmitter2 } from '@nestjs/event-emitter'
-import { CheckoutSource, CleaningStatus, Priority } from '@zenix/shared'
+import { CleaningStatus, Priority } from '@zenix/shared'
 import { CheckoutsService, CheckoutInput } from './checkouts.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { TenantContextService } from '../common/tenant-context.service'
@@ -59,7 +59,7 @@ function makeCheckoutInput(overrides: Partial<CheckoutInput> = {}): CheckoutInpu
   return {
     roomId: 'room-1',
     actualCheckoutAt: new Date('2026-03-19T11:00:00Z'),
-    source: CheckoutSource.MANUAL,
+    source: 'MANUAL',
     enteredById: 'staff-1',
     ...overrides,
   }
@@ -184,25 +184,6 @@ describe('CheckoutsService', () => {
           data: expect.objectContaining({ priority: Priority.URGENT }),
         }),
       )
-    })
-
-    it('es idempotente — si el mismo cloudbedsReservationId ya fue procesado no crea nada nuevo', async () => {
-      // Arrange — la reserva ya está en la BD
-      const existingCheckout = { id: 'checkout-existente', cloudbedsReservationId: 'res-123' }
-      prismaMock.checkout.findUnique.mockResolvedValue(existingCheckout)
-
-      // Act
-      const result = await service.processCheckout(
-        makeCheckoutInput({
-          source: CheckoutSource.CLOUDBEDS,
-          cloudbedsReservationId: 'res-123',
-        }),
-      )
-
-      // Assert — devuelve el existente y NO toca la BD
-      expect(result.id).toBe('checkout-existente')
-      expect(prismaMock.checkout.create).not.toHaveBeenCalled()
-      expect(prismaMock.cleaningTask.create).not.toHaveBeenCalled()
     })
 
     it('lanza NotFoundException si el cuarto no existe', async () => {

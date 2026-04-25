@@ -2,6 +2,7 @@ import {
   startOfDay, differenceInCalendarDays, addDays,
   format, isToday, isBefore, isEqual, isAfter,
 } from 'date-fns'
+
 import { es } from 'date-fns/locale'
 import type { StayStatus } from '../types/timeline.types'
 
@@ -53,7 +54,19 @@ export function generateDays(start: Date, count: number): Date[] {
   return Array.from({ length: count }, (_, i) => addDays(start, i))
 }
 
-export function getStayStatus(checkIn: Date, checkOut: Date, actualCheckout?: Date): StayStatus {
+export function getStayStatus(
+  checkIn: Date,
+  checkOut: Date,
+  actualCheckout?: Date,
+  actualCheckin?: Date,
+  noShowAt?: Date | null,
+  nightAuditHour?: number,
+): StayStatus {
+  // No-show must be evaluated first — it overrides every other derived status.
+  // A no-show with checkIn=today would otherwise return UNCONFIRMED, making
+  // the check-in CTA appear alongside the no-show panel (impossible business state).
+  if (noShowAt) return 'NO_SHOW'
+
   const today = startOfDay(new Date())
   const inDay = startOfDay(checkIn)
   const outDay = startOfDay(checkOut)
@@ -64,6 +77,18 @@ export function getStayStatus(checkIn: Date, checkOut: Date, actualCheckout?: Da
   if (isBefore(outDay, today)) return 'DEPARTED'
   // Sale hoy — checkout pendiente
   if (isEqual(outDay, today)) return 'DEPARTING'
+  // Hoy es día de llegada y aún no se confirmó check-in → UNCONFIRMED
+  if (isEqual(inDay, today) && isAfter(outDay, today) && !actualCheckin) return 'UNCONFIRMED'
+  // checkIn fue ayer en calendario pero aún estamos antes del night audit:
+  // el huésped no llegó → sigue siendo UNCONFIRMED (mismo día hotelero).
+  const auditHour = nightAuditHour ?? 2
+  const yesterday = startOfDay(addDays(today, -1))
+  if (
+    !actualCheckin &&
+    isEqual(inDay, yesterday) &&
+    isAfter(outDay, today) &&
+    new Date().getHours() < auditHour
+  ) return 'UNCONFIRMED'
   // In-house: check-in past or today, checkout future
   if ((isBefore(inDay, today) || isEqual(inDay, today)) && isAfter(outDay, today))
     return 'IN_HOUSE'

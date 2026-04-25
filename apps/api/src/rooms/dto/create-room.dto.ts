@@ -17,7 +17,4 @@ export class CreateRoomDto {
   @IsInt()
   floor?: number
 
-  @IsOptional()
-  @IsString()
-  cloudbedsRoomId?: string
 }

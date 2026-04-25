@@ -62,10 +62,6 @@ export enum TaskLogEvent {
   NOTE_ADDED = 'NOTE_ADDED',
 }
 
-export enum CheckoutSource {
-  CLOUDBEDS = 'CLOUDBEDS',
-  MANUAL = 'MANUAL',
-}
 
 export enum MaintenanceCategory {
   PLUMBING = 'PLUMBING',
@@ -126,11 +122,20 @@ export enum JourneyEventType {
   SEGMENT_LOCKED     = 'SEGMENT_LOCKED',
   ROOM_MOVE_EXECUTED = 'ROOM_MOVE_EXECUTED',
   EXTENSION_APPROVED = 'EXTENSION_APPROVED',
+  CHECKED_IN         = 'CHECKED_IN',
   CHECKED_OUT        = 'CHECKED_OUT',
   CANCELLED          = 'CANCELLED',
   NO_SHOW_MARKED     = 'NO_SHOW_MARKED',
   NO_SHOW_REVERTED   = 'NO_SHOW_REVERTED',
   JOURNEY_SPLIT      = 'JOURNEY_SPLIT',
+}
+
+export enum PaymentMethod {
+  CASH          = 'CASH',
+  CARD_TERMINAL = 'CARD_TERMINAL',
+  BANK_TRANSFER = 'BANK_TRANSFER',
+  OTA_PREPAID   = 'OTA_PREPAID',
+  COMP          = 'COMP',
 }
 
 export enum SegmentReason {
@@ -139,6 +144,13 @@ export enum SegmentReason {
   EXTENSION_NEW_ROOM  = 'EXTENSION_NEW_ROOM',
   ROOM_MOVE           = 'ROOM_MOVE',
   SPLIT               = 'SPLIT',
+}
+
+export enum KeyDeliveryType {
+  PHYSICAL = 'PHYSICAL', // llave física tradicional
+  CARD     = 'CARD',     // tarjeta magnética / RFID
+  CODE     = 'CODE',     // PIN / código numérico
+  MOBILE   = 'MOBILE',   // link o app móvil
 }
 
 // ─── SmartBlock ───────────────────────────────────────────────────────────────

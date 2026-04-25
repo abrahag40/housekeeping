@@ -37,11 +37,6 @@ export class RoomsService {
     return room
   }
 
-  async findByCloudbedsId(cloudbedsRoomId: string, propertyId: string) {
-    const orgId = this.tenant.getOrganizationId()
-    return this.prisma.room.findFirst({ where: { cloudbedsRoomId, propertyId, organizationId: orgId } })
-  }
-
   async update(id: string, dto: Partial<CreateRoomDto>) {
     await this.findOne(id)
     return this.prisma.room.update({

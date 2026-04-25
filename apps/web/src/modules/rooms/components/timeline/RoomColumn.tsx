@@ -18,6 +18,20 @@ interface RoomColumnProps {
   onToggleGroup: (groupId: string) => void
   scrollTop?: number
   readinessTasks?: ReadinessTask[]
+  /**
+   * Map<roomId, lockedByName> — rooms currently soft-locked by another
+   * receptionist. Renders a 🔒 badge with the operator's name.
+   *
+   * UX rationale (CLAUDE.md §Principio Rector):
+   * - Principio de escasez visual (Cialdini): el badge ámbar con candado
+   *   activa atención prioritaria vía Sistema 1 (Kahneman) sin interrumpir
+   *   el flujo del recepcionista — es informativo, no bloqueante.
+   * - Gestalt proximidad: el badge se coloca junto al número de habitación
+   *   para que el vínculo "cuarto ↔ estado de bloqueo" sea inmediato.
+   * - Carga cognitiva (Sweller): nombre truncado a 10 chars + ícono candado
+   *   es el mínimo de información necesaria para evitar conflicto.
+   */
+  lockedRooms?: Map<string, string>
   /** When true: render rows directly (no internal scroll/translate, no header spacer). */
   embedded?: boolean
 }
@@ -30,7 +44,7 @@ const READINESS_CONFIG: Record<string, { color: string; label: string; title: st
   APPROVED:          { color: '#10B981', label: '\u2713\u2713', title: 'Aprobada' },
 }
 
-export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, readinessTasks, embedded = false }: RoomColumnProps) {
+export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, readinessTasks, lockedRooms, embedded = false }: RoomColumnProps) {
   const groupMap = new Map(groups.map((g) => [g.id, g]))
 
   const rowsContent = (
@@ -94,6 +108,21 @@ export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, rea
                 {room.floor != null && (
                   <span className="text-[10px] text-slate-400">P{room.floor}</span>
                 )}
+
+                {/* Soft-lock badge — visible only when another receptionist
+                    has this room open. Amber = advisory (no-bloqueante).
+                    Truncado a 10 chars para no saturar la columna estrecha.
+                    Tooltip completo vía title para quien necesite el nombre
+                    completo (Ley de Fitts: info extra on-demand, no ambient). */}
+                {lockedRooms?.has(room.id) && (
+                  <span
+                    className="ml-auto flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 leading-none select-none"
+                    title={`En uso por ${lockedRooms.get(room.id)}`}
+                  >
+                    🔒 <span className="max-w-[56px] truncate">{lockedRooms.get(room.id)}</span>
+                  </span>
+                )}
+
                 {(() => {
                   const task = readinessTasks?.find((t) => t.roomId === room.id)
                   if (!task) return null

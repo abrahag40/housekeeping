@@ -1,3 +1,4 @@
+import { useSoftLock } from '@/hooks/useSoftLock'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -134,12 +135,16 @@ interface CheckInDialogProps {
   roomNumber?: string
   initialCheckIn?: Date
   onConfirm: (data: NewStayData) => void
+  propertyId?: string
 }
 
 // ── COMPONENTE ────────────────────────────────────────────────
 export function CheckInDialog({
-  open, onClose, initialRoomId, roomNumber, initialCheckIn, onConfirm
+  open, onClose, initialRoomId, roomNumber, initialCheckIn, onConfirm, propertyId
 }: CheckInDialogProps) {
+  // Advisory soft-lock: acquired while this dialog is open, released on close.
+  // Other receptionists viewing the same calendar see a 🔒 badge on this room.
+  useSoftLock(open && initialRoomId ? initialRoomId : null, propertyId ?? null)
   const [step, setStep] = useState(1)
   const [docPreview, setDocPreview] = useState<string | null>(null)
   const [showCancelAlert, setShowCancelAlert] = useState(false)

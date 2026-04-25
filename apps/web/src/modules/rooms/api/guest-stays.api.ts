@@ -1,5 +1,7 @@
 import { api } from '@/api/client'
-import type { RoomAvailabilityResult } from '@zenix/shared'
+import type { RoomAvailabilityResult, ConfirmCheckinInput, PaymentEntryInput } from '@zenix/shared'
+
+export type { ConfirmCheckinInput, PaymentEntryInput }
 
 const BASE = '/v1/guest-stays'
 
@@ -46,6 +48,12 @@ export const guestStaysApi = {
   checkout: (stayId: string) =>
     api.post(`${BASE}/${stayId}/checkout`, {}),
 
+  earlyCheckout: (stayId: string, notes?: string) =>
+    api.post<{ success: boolean; freedFrom: string; freedTo: string; tasksScheduledFor: 'today' | 'tomorrow' }>(
+      `${BASE}/${stayId}/early-checkout`,
+      { notes },
+    ),
+
   moveRoom: (stayId: string, newRoomId: string, pricingDecision: string) =>
     api.patch(`${BASE}/${stayId}/move-room`, { newRoomId, pricingDecision }),
 
@@ -54,6 +62,12 @@ export const guestStaysApi = {
 
   extendSameRoom: (journeyId: string, newCheckOut: Date) =>
     api.post(`/v1/stay-journeys/${journeyId}/extend-same-room`, {
+      newCheckOut: newCheckOut.toISOString(),
+    }),
+
+  extendNewRoom: (journeyId: string, newRoomId: string, newCheckOut: Date) =>
+    api.post(`/v1/stay-journeys/${journeyId}/extend-new-room`, {
+      newRoomId,
       newCheckOut: newCheckOut.toISOString(),
     }),
 
@@ -71,4 +85,10 @@ export const guestStaysApi = {
         checkOut: p.checkOut.toISOString(),
       })),
     }),
+
+  confirmCheckin: (stayId: string, data: ConfirmCheckinInput) =>
+    api.post<{ success: boolean; actualCheckin: string }>(
+      `${BASE}/${stayId}/confirm-checkin`,
+      data,
+    ),
 }

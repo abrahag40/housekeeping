@@ -3,7 +3,7 @@
  *
  * Gestiona los ajustes operativos de cada propiedad (hotel/hostel) dentro del sistema.
  * La configuración controla comportamientos clave como notificaciones, umbrales de tiempo,
- * integración con CloudBeds, etc. (según lo definido en el modelo PropertySettings del schema).
+ * integración con channel managers, etc. (según lo definido en el modelo PropertySettings del schema).
  *
  * Diseño de inicialización lazy (auto-create on first access):
  *  No se crean los registros de configuración al dar de alta una propiedad. En cambio,

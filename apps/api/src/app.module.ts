@@ -16,7 +16,6 @@ import { CheckoutsModule } from './checkouts/checkouts.module'
 import { NotesModule } from './notes/notes.module'
 import { MaintenanceModule } from './maintenance/maintenance.module'
 import { NotificationsModule } from './notifications/notifications.module'
-import { CloudbedsModule } from './integrations/cloudbeds/cloudbeds.module'
 import { ChannexModule } from './integrations/channex/channex.module'
 import { AvailabilityModule } from './pms/availability/availability.module'
 import { SettingsModule } from './settings/settings.module'
@@ -32,6 +31,8 @@ import { StayJourneysModule } from './pms/stay-journeys/stay-journeys.module'
 import { DashboardModule } from './dashboard/dashboard.module'
 import { BlocksModule } from './blocks/blocks.module'
 import { PaymentsModule } from './payments/payments.module'
+import { SoftLockModule } from './soft-lock/soft-lock.module'
+import { NotificationCenterModule } from './notification-center/notification-center.module'
 import { TenantContextMiddleware } from './common/tenant-context.middleware'
 import { TenantContextService } from './common/tenant-context.service'
 import { TenantGuard } from './common/guards/tenant.guard'
@@ -60,7 +61,6 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
     NotesModule,
     MaintenanceModule,
     NotificationsModule,
-    CloudbedsModule,
     ChannexModule,
     AvailabilityModule,
     SettingsModule,
@@ -74,6 +74,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard'
     DashboardModule,
     BlocksModule,
     PaymentsModule,
+    SoftLockModule,
+    NotificationCenterModule,
   ],
   providers: [
     TenantContextService,
