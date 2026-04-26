@@ -123,7 +123,6 @@ export function BlockModal({
   const [semantic, setSemantic]             = useState<BlockSemantic>(BlockSemantic.OUT_OF_SERVICE)
   const [reason, setReason]                 = useState<BlockReason>(BlockReason.MAINTENANCE)
   const [notes, setNotes]                   = useState('')
-  const [internalNotes, setInternalNotes]   = useState('')
   const [showNotes, setShowNotes]           = useState(false)
   const [startDate, setStartDate]           = useState(isoToday())
   const [endDate, setEndDate]               = useState('')
@@ -171,7 +170,6 @@ export function BlockModal({
     setSemantic(BlockSemantic.OUT_OF_SERVICE)
     setReason(BlockReason.MAINTENANCE)
     setNotes('')
-    setInternalNotes('')
     setShowNotes(false)
     setStartDate(start)
     setEndDate(prefillEndDate ?? addDaysToIso(start, 1))
@@ -217,7 +215,6 @@ export function BlockModal({
       semantic,
       reason,
       notes: notes.trim() || undefined,
-      internalNotes: internalNotes.trim() || undefined,
       startDate,
       endDate: endDate || undefined,
     }
@@ -550,42 +547,18 @@ export function BlockModal({
                 </button>
 
                 {showNotes && (
-                  <div className="mt-3 space-y-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1.5">
-                        Para housekeeping
-                        {reason === BlockReason.OTHER && (
-                          <span className="text-red-500 ml-1">*</span>
-                        )}
-                      </label>
-                      <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        rows={2}
-                        placeholder={
-                          reason === BlockReason.OTHER
-                            ? 'Obligatorio cuando el motivo es Otro'
-                            : 'Instrucciones para la camarera (visible en la app)'
-                        }
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                      />
-                    </div>
-
-                    {isSupervisor && (
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1.5">
-                          Notas internas{' '}
-                          <span className="text-gray-400 font-normal">(solo supervisores)</span>
-                        </label>
-                        <textarea
-                          value={internalNotes}
-                          onChange={(e) => setInternalNotes(e.target.value)}
-                          rows={2}
-                          placeholder="Contexto para supervisores (no visible para housekeeping)"
-                          className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                        />
-                      </div>
-                    )}
+                  <div className="mt-3">
+                    <textarea
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      rows={2}
+                      placeholder={
+                        reason === BlockReason.OTHER
+                          ? 'Obligatorio cuando el motivo es Otro'
+                          : 'Instrucciones visibles para todo el equipo'
+                      }
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                    />
                   </div>
                 )}
               </div>
