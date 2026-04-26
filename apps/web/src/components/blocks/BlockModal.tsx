@@ -72,6 +72,8 @@ interface BlockModalProps {
   onSubmit: (dto: CreateBlockDto) => Promise<void>
   prefillRoomId?: string
   prefillUnitId?: string
+  prefillStartDate?: string
+  prefillEndDate?: string
 }
 
 export function BlockModal({
@@ -80,6 +82,8 @@ export function BlockModal({
   onSubmit,
   prefillRoomId,
   prefillUnitId,
+  prefillStartDate,
+  prefillEndDate,
 }: BlockModalProps) {
   const user = useAuthStore((s) => s.user)
   const isSupervisor = user?.role === HousekeepingRole.SUPERVISOR
@@ -130,11 +134,11 @@ export function BlockModal({
       setReason(BlockReason.MAINTENANCE)
       setNotes('')
       setInternalNotes('')
-      setStartDate(today())
-      setEndDate('')
+      setStartDate(prefillStartDate ?? today())
+      setEndDate(prefillEndDate ?? '')
       setError('')
     }
-  }, [isOpen, prefillRoomId, prefillUnitId])
+  }, [isOpen, prefillRoomId, prefillUnitId, prefillStartDate, prefillEndDate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

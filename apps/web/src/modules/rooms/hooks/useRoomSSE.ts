@@ -7,10 +7,17 @@ const ROOM_EVENT_TYPES: SseEventType[] = [
   'room:moved',
   'checkin:completed',
   'checkout:confirmed',
-  // No-show and potential no-show events — cause block visuals to update
   'stay:no_show',
   'stay:no_show_reverted',
   'arrival:at_risk',
+  // Block lifecycle events — keep calendar and all modules in sync
+  'block:created',
+  'block:approved',
+  'block:rejected',
+  'block:activated',
+  'block:expired',
+  'block:cancelled',
+  'block:extended',
 ]
 
 /**
@@ -52,6 +59,10 @@ export function useRoomSSE(propertyId: string) {
           })
           queryClient.invalidateQueries({
             queryKey: ['room-readiness'],
+            refetchType: 'active',
+          })
+          queryClient.invalidateQueries({
+            queryKey: ['blocks'],
             refetchType: 'active',
           })
         } catch {

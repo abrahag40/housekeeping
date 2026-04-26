@@ -9,6 +9,7 @@ import { useDragDrop } from '../../hooks/useDragDrop'
 import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useSplitMidStay, useSplitReservation, useMarkNoShow, useRevertNoShow, useRoomReadinessTasks, useExtendStay, useExtendSameRoom, useExtendNewRoom, useMoveExtensionRoom, useConfirmCheckin } from '../../hooks/useGuestStays'
 import { guestStaysApi } from '../../api/guest-stays.api'
 import { useStayJourneys } from '../../hooks/useStayJourneys'
+import { useBlocks, useCreateBlock } from '../../hooks/useBlocks'
 import { useRoomSSE } from '../../hooks/useRoomSSE'
 import { useSoftLockSSE } from '@/hooks/useSoftLock'
 import { usePropertySettings } from '@/hooks/usePropertySettings'
@@ -19,6 +20,7 @@ import { DateHeader } from './DateHeader'
 import { RoomColumn } from './RoomColumn'
 import { TimelineGrid } from './TimelineGrid'
 import { BookingsLayer } from './BookingsLayer'
+import { BlocksLayer } from './BlocksLayer'
 import { TodayColumnHighlight } from './TodayColumnHighlight'
 import { OccupancyFooter } from './OccupancyFooter'
 import { DragGhost } from './DragGhost'
@@ -32,6 +34,9 @@ import { MoveExtensionConfirmDialog } from '../dialogs/MoveExtensionConfirmDialo
 import { MoveReservationConfirmDialog } from '../dialogs/MoveReservationConfirmDialog'
 import { NoShowConfirmModal } from './NoShowConfirmModal'
 import { ConfirmCheckinDialog } from '../dialogs/ConfirmCheckinDialog'
+import { BlockModal } from '@/components/blocks/BlockModal'
+import type { RoomBlockDto } from '@zenix/shared'
+import { format } from 'date-fns'
 import type {
   FlatRow,
   DropResult,
@@ -209,6 +214,10 @@ export function TimelineScheduler() {
 
   const { journeyBlocks: rawJourneyBlocks } = useStayJourneys(PROPERTY_ID, dataWindow.from, dataWindow.to)
 
+  // ─── SmartBlock data (ACTIVE + APPROVED + PENDING_APPROVAL) ────────────────
+  const { data: roomBlocks = [] } = useBlocks(PROPERTY_ID)
+  const createBlockMut = useCreateBlock(PROPERTY_ID)
+
   // Propagate `noShowAt` from parent GuestStay to each journey segment block.
   // The journeys endpoint doesn't return this field, but drag/drop conflict
   // detection needs it: a no-show releases inventory (CLAUDE.md §17) — segments
@@ -340,6 +349,15 @@ export function TimelineScheduler() {
     ? ([...stays, ...journeyBlocks].find((s) => s.id === noShowDialog.stayId) ?? null)
     : null
 
+  // ─── Block modal ───────────────────────────────────────────────
+  const [blockModal, setBlockModal] = useState<{
+    roomId?: string
+    startDate?: string
+    endDate?: string
+  } | null>(null)
+
+  const [blockDetail, setBlockDetail] = useState<RoomBlockDto | null>(null)
+
   // ─── Extend stay by drag ───────────────────────────────────────
   const [extendState, setExtendState] = useState<ExtendState | null>(null)
   const [extendConfirm, setExtendConfirm] = useState<{
@@ -445,10 +463,29 @@ export function TimelineScheduler() {
     return set
   }, [allBlocksForDragCheck])
 
+  // Block occupancy set — ACTIVE/APPROVED blocks mark cells as non-interactive
+  // so the ghost block and check-in click don't fire on blocked dates.
+  const blockOccupancySet = useMemo(() => {
+    const set = new Set<string>()
+    const MS_DAY = 86400000
+    for (const block of roomBlocks) {
+      if (!block.roomId) continue
+      if (block.status !== 'ACTIVE' && block.status !== 'APPROVED') continue
+      const start = new Date(block.startDate).getTime()
+      const end   = block.endDate ? new Date(block.endDate).getTime() : start + MS_DAY * 365
+      for (let t = start; t < end; t += MS_DAY) {
+        const d = new Date(t)
+        set.add(`${block.roomId}:${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`)
+      }
+    }
+    return set
+  }, [roomBlocks])
+
   const isOccupied = useCallback((roomId: string, date: Date) => {
     const d = startOfDay(date)
-    return occupancySet.has(`${roomId}:${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`)
-  }, [occupancySet])
+    const key = `${roomId}:${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`
+    return occupancySet.has(key) || blockOccupancySet.has(key)
+  }, [occupancySet, blockOccupancySet])
 
   const {
     dragState,
@@ -705,6 +742,12 @@ export function TimelineScheduler() {
                 const roomRow = flatRows.find(r => r.id === roomId && r.type === 'room')
                 setCheckInDialog({ open: true, roomId, roomNumber: roomRow?.room?.number ?? roomId.slice(0, 8), checkIn: date })
               }}
+              onCellContextMenu={(roomId, date) => {
+                setBlockModal({
+                  roomId,
+                  startDate: format(date, 'yyyy-MM-dd'),
+                })
+              }}
               isOccupied={isOccupied}
               getRoomRate={(roomId) => {
                 const group = groups.find(g => g.rooms.some(r => r.id === roomId))
@@ -780,6 +823,15 @@ export function TimelineScheduler() {
               )
             })()}
 
+            <BlocksLayer
+              blocks={roomBlocks}
+              flatRows={flatRows}
+              dayWidth={dayWidth}
+              calendarStart={POOL_START}
+              calendarEnd={dataWindow.to}
+              totalWidth={totalWidth}
+              onBlockClick={setBlockDetail}
+            />
             <BookingsLayer
               stays={hideNoShows ? staysWithoutJourneys.filter((s) => !s.noShowAt) : staysWithoutJourneys}
               nsStripeIds={hideNoShows ? undefined : nsStripeIds}
@@ -1113,6 +1165,63 @@ export function TimelineScheduler() {
             )
           }}
         />
+      )}
+
+      {/* ─── BlockModal — create new block ──────────────────── */}
+      <BlockModal
+        isOpen={!!blockModal}
+        onClose={() => setBlockModal(null)}
+        prefillRoomId={blockModal?.roomId}
+        prefillStartDate={blockModal?.startDate}
+        prefillEndDate={blockModal?.endDate}
+        onSubmit={async (dto) => {
+          await createBlockMut.mutateAsync(dto)
+          setBlockModal(null)
+        }}
+      />
+
+      {/* ─── Block detail sheet (click on existing block) ───── */}
+      {blockDetail && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/30"
+          onClick={() => setBlockDetail(null)}
+        >
+          <div
+            className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:w-96 p-5 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-semibold text-slate-900 text-sm">
+                  {blockDetail.room ? `Hab. ${(blockDetail.room as any).number}` : blockDetail.roomId?.slice(0, 8)}
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {blockDetail.semantic} · {blockDetail.status}
+                </p>
+              </div>
+              <button
+                onClick={() => setBlockDetail(null)}
+                className="text-slate-400 hover:text-slate-600 text-lg leading-none"
+              >×</button>
+            </div>
+            <div className="text-sm text-slate-700 space-y-1">
+              <p><span className="text-slate-400 text-xs">Razón:</span> {blockDetail.reason}</p>
+              <p><span className="text-slate-400 text-xs">Inicio:</span> {new Date(blockDetail.startDate).toLocaleDateString('es-MX')}</p>
+              {blockDetail.endDate && (
+                <p><span className="text-slate-400 text-xs">Fin:</span> {new Date(blockDetail.endDate).toLocaleDateString('es-MX')}</p>
+              )}
+              {blockDetail.notes && (
+                <p><span className="text-slate-400 text-xs">Notas:</span> {blockDetail.notes}</p>
+              )}
+            </div>
+            <button
+              className="text-xs text-indigo-600 hover:underline"
+              onClick={() => { setBlockDetail(null); window.location.href = '/blocks' }}
+            >
+              Ver todos los bloqueos →
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

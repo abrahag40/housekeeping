@@ -54,6 +54,7 @@ type NavItem = NavLeaf | NavGroup
 const NAV: NavItem[] = [
   { kind: 'leaf', to: '/dashboard', icon: '🏠', label: 'Panel' },
   { kind: 'leaf', to: '/pms',       icon: '📅', label: 'Calendario' },
+  { kind: 'leaf', to: '/blocks',    icon: '🔒', label: 'Bloqueos' },
   {
     kind: 'group',
     icon: '🧹',
@@ -64,7 +65,6 @@ const NAV: NavItem[] = [
       { to: '/kanban',        icon: '🗂️', label: 'Tareas' },
       { to: '/checkouts',     icon: '🚪', label: 'Checkouts' },
       { to: '/discrepancies', icon: '⚠️', label: 'Discrepancias', showDiscrepancyBadge: true },
-      { to: '/blocks',        icon: '🔒', label: 'Bloqueos' },
     ],
   },
   { kind: 'leaf', to: '/reports',       icon: '📊', label: 'Reportes' },
