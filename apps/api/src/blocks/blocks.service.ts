@@ -21,6 +21,7 @@ import { PrismaService } from '../prisma/prisma.service'
 import { TenantContextService } from '../common/tenant-context.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { PushService } from '../notifications/push.service'
+import { AvailabilityService } from '../pms/availability/availability.service'
 import { CreateBlockDto } from './dto/create-block.dto'
 import {
   ApproveBlockDto,
@@ -67,6 +68,7 @@ export class BlocksService {
     private tenant: TenantContextService,
     private notifications: NotificationsService,
     private push: PushService,
+    private availability: AvailabilityService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -397,6 +399,7 @@ export class BlocksService {
 
     this.notifications.emit(block.propertyId, 'block:activated', { blockId })
     this.logger.log(`Block ${blockId} activated → MAINTENANCE task created`)
+    void this.syncChannex(block)
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -451,6 +454,7 @@ export class BlocksService {
     })
 
     this.notifications.emit(block.propertyId, 'block:cancelled', { blockId })
+    void this.syncChannex(block)
     return this.prisma.roomBlock.findUnique({ where: { id: blockId }, include: BLOCK_INCLUDE })
   }
 
@@ -492,6 +496,8 @@ export class BlocksService {
     })
 
     this.notifications.emit(block.propertyId, 'block:extended', { blockId, endDate: dto.endDate })
+    // Push the full range (idempotent) so Channex reflects the extended window
+    void this.syncChannex({ roomId: block.roomId, unitId: block.unitId, startDate: block.startDate, endDate: newEndDate, unit: block.unit })
     return updated
   }
 
@@ -536,6 +542,7 @@ export class BlocksService {
     })
 
     this.notifications.emit(block.propertyId, 'block:cancelled', { blockId, earlyRelease: true })
+    void this.syncChannex(block)
     return this.prisma.roomBlock.findUnique({ where: { id: blockId }, include: BLOCK_INCLUDE })
   }
 
@@ -580,6 +587,7 @@ export class BlocksService {
 
     this.notifications.emit(block.propertyId, 'block:expired', { blockId })
     this.logger.log(`Block ${blockId} expired automatically`)
+    void this.syncChannex(block)
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -668,5 +676,58 @@ export class BlocksService {
 
   private async notifyStaff(_orgId: string, staffId: string, title: string, body: string) {
     await this.push.sendToStaff(staffId, title, body, {})
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CHANNEX SYNC — fire-and-forget helpers
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** Resolves the canonical roomId for a block (unit-level blocks need unit.roomId). */
+  private resolveRoomIdForBlock(block: {
+    roomId: string | null
+    unit?: { roomId: string } | null
+  }): string | null {
+    return block.roomId ?? block.unit?.roomId ?? null
+  }
+
+  /**
+   * Generates a Date[] (midnight UTC each day) covering the block's range.
+   * Capped at 365 days to prevent runaway loops for indefinite blocks.
+   */
+  private blockDateRange(block: { startDate: Date; endDate: Date | null }): Date[] {
+    const start = new Date(block.startDate)
+    start.setUTCHours(0, 0, 0, 0)
+
+    const cap = new Date(start)
+    cap.setUTCDate(cap.getUTCDate() + 365)
+    const end = block.endDate ? new Date(Math.min(new Date(block.endDate).getTime(), cap.getTime())) : cap
+    end.setUTCHours(0, 0, 0, 0)
+
+    const dates: Date[] = []
+    const current = new Date(start)
+    while (current < end) {
+      dates.push(new Date(current))
+      current.setUTCDate(current.getUTCDate() + 1)
+    }
+    return dates
+  }
+
+  /**
+   * Computes absolute availability for the block's room and pushes to Channex.
+   * Called after every lifecycle transition that changes the room's occupancy.
+   * Fire-and-forget: failures are logged inside computeAndPushInventory.
+   */
+  private async syncChannex(block: {
+    roomId: string | null
+    unitId: string | null
+    startDate: Date
+    endDate: Date | null
+    unit?: { roomId: string } | null
+  }): Promise<void> {
+    const roomId = this.resolveRoomIdForBlock(block)
+    if (!roomId) return
+    const dates = this.blockDateRange(block)
+    if (dates.length === 0) return
+    await this.availability.computeAndPushInventory(roomId, dates)
   }
 }
