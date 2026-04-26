@@ -32,6 +32,14 @@ interface RoomColumnProps {
    *   es el mínimo de información necesaria para evitar conflicto.
    */
   lockedRooms?: Map<string, string>
+  /**
+   * Callback que abre el modal de bloqueo pre-llenado con el roomId.
+   * Aparece como botón visible al hacer hover sobre la fila de la habitación.
+   * Discoverability: NNGroup H#6 (Reconocimiento > Recuerdo) — el botón
+   * es la affordance primaria; el click-derecho en el grid es acelerador
+   * secundario para usuarios avanzados (Apple HIG: gestures as shortcuts).
+   */
+  onBlockRequest?: (roomId: string) => void
   /** When true: render rows directly (no internal scroll/translate, no header spacer). */
   embedded?: boolean
 }
@@ -44,7 +52,7 @@ const READINESS_CONFIG: Record<string, { color: string; label: string; title: st
   APPROVED:          { color: '#10B981', label: '\u2713\u2713', title: 'Aprobada' },
 }
 
-export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, readinessTasks, lockedRooms, embedded = false }: RoomColumnProps) {
+export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, readinessTasks, lockedRooms, onBlockRequest, embedded = false }: RoomColumnProps) {
   const groupMap = new Map(groups.map((g) => [g.id, g]))
 
   const rowsContent = (
@@ -95,8 +103,8 @@ export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, rea
               <div
                 key={`r-${row.id}`}
                 className={cn(
-                  'flex items-center gap-2 px-3 border-b border-slate-200/70',
-                  'hover:bg-slate-50/50 transition-colors',
+                  'relative flex items-center gap-2 px-3 border-b border-slate-200/70',
+                  'hover:bg-slate-50/50 transition-colors group',
                   'animate-slide-down',
                 )}
                 style={{ height: TIMELINE.ROW_HEIGHT }}
@@ -155,6 +163,25 @@ export function RoomColumn({ flatRows, groups, onToggleGroup, scrollTop = 0, rea
                     </div>
                   )
                 })()}
+
+                {/* Hover block button — affordance primaria (NNGroup H#6).
+                    Aparece al pasar el cursor; click-derecho en el grid es
+                    el acelerador secundario para usuarios avanzados. */}
+                {onBlockRequest && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onBlockRequest(room.id) }}
+                    title="Bloquear habitación"
+                    className={cn(
+                      'absolute right-1.5 top-1/2 -translate-y-1/2',
+                      'opacity-0 group-hover:opacity-100 transition-opacity',
+                      'p-0.5 rounded text-slate-400 hover:text-amber-600 hover:bg-amber-50',
+                      'text-[13px] leading-none',
+                    )}
+                  >
+                    🔒
+                  </button>
+                )}
               </div>
             )
           })}

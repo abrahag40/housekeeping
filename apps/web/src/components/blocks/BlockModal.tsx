@@ -1,15 +1,19 @@
 /**
  * BlockModal — Formulario para crear solicitudes de bloqueo.
  *
- * Decisiones de UX (principios NNGroup + Apple HIG):
- * 1. XOR visual: "Habitación completa" vs "Unidad específica" con radio buttons
- *    → previene la confusión de tener ambas a la vez.
- * 2. Semántica con descripción inline: el recepcionista no sabe qué es OOO/OOS,
- *    pero sí entiende "problema menor" vs "inhabilitada".
- * 3. Motivos filtrados por semántica: dropdown dinámico evita combos inválidos.
- * 4. Motivos críticos fuerzan OOO automáticamente (PEST_CONTROL, etc.).
- * 5. Fecha de fin opcional: UI explica que "indefinido" requiere liberación manual.
- * 6. Notas housekeeping vs notas internas: separación visual clara.
+ * Layout: 2 columnas (Qué bloquear | Cuándo y detalles).
+ * Justificación: Baymard Institute (2022) — 2 columnas correctas cuando los
+ * campos tienen dos grupos conceptuales distintos y el ancho lo permite.
+ * NNGroup H#1: toda la información crítica cabe sin scroll en viewports ≥ 700px.
+ *
+ * Bug fix (circular lock):
+ * - Antes: `semanticForcedByReason` añadía `pointer-events-none` a los radios
+ *   de semántica → el usuario no podía escapar del semantic forzado.
+ * - Ahora: el forced-semantic es INFORMATIVO (badge + mensaje), no bloqueante.
+ *   `handleSemanticChange` sigue reseteando el motivo si el nuevo semantic
+ *   no lo incluye — el usuario siempre tiene una ruta de salida.
+ * - Eliminados los dos `useEffect` de sincronización reason ↔ semantic;
+ *   reemplazados por handlers directos sin dependencias circulares.
  */
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -55,16 +59,30 @@ const REASONS_BY_SEMANTIC: Record<BlockSemantic, BlockReason[]> = {
   ],
 }
 
-// Motivos que fuerzan semántica OOO
+// Motivos que fuerzan un semantic específico (problema grave, no negociable)
 const FORCE_OOO = new Set([
   BlockReason.PEST_CONTROL,
   BlockReason.WATER_DAMAGE,
   BlockReason.ELECTRICAL,
   BlockReason.STRUCTURAL,
 ])
-
-// Motivos que fuerzan OOI
 const FORCE_OOI = new Set([BlockReason.RENOVATION])
+
+// Descripción operativa de cada semantic — lenguaje del usuario, no del sistema
+const SEMANTIC_DESCRIPTIONS: Record<BlockSemantic, string> = {
+  [BlockSemantic.OUT_OF_SERVICE]:   'Problema menor, no afecta revenue. Venta posible en emergencia.',
+  [BlockSemantic.OUT_OF_ORDER]:     'Inhabilitada. Sale del inventario. Requiere aprobación.',
+  [BlockSemantic.OUT_OF_INVENTORY]: 'Largo plazo (renovación). Excluida del inventario operativo.',
+  [BlockSemantic.HOUSE_USE]:        'Uso interno: fotografía, capacitación, personal.',
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function today() {
+  return new Date().toISOString().split('T')[0]
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
 
 interface BlockModalProps {
   isOpen: boolean
@@ -75,6 +93,8 @@ interface BlockModalProps {
   prefillStartDate?: string
   prefillEndDate?: string
 }
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export function BlockModal({
   isOpen,
@@ -88,17 +108,17 @@ export function BlockModal({
   const user = useAuthStore((s) => s.user)
   const isSupervisor = user?.role === HousekeepingRole.SUPERVISOR
 
-  const [scope, setScope] = useState<'room' | 'unit'>('unit')
-  const [roomId, setRoomId] = useState(prefillRoomId ?? '')
-  const [unitId, setUnitId] = useState(prefillUnitId ?? '')
-  const [semantic, setSemantic] = useState<BlockSemantic>(BlockSemantic.OUT_OF_SERVICE)
-  const [reason, setReason] = useState<BlockReason>(BlockReason.MAINTENANCE)
-  const [notes, setNotes] = useState('')
-  const [internalNotes, setInternalNotes] = useState('')
-  const [startDate, setStartDate] = useState(today())
-  const [endDate, setEndDate] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  const [scope, setScope]                   = useState<'room' | 'unit'>('unit')
+  const [roomId, setRoomId]                 = useState(prefillRoomId ?? '')
+  const [unitId, setUnitId]                 = useState(prefillUnitId ?? '')
+  const [semantic, setSemantic]             = useState<BlockSemantic>(BlockSemantic.OUT_OF_SERVICE)
+  const [reason, setReason]                 = useState<BlockReason>(BlockReason.MAINTENANCE)
+  const [notes, setNotes]                   = useState('')
+  const [internalNotes, setInternalNotes]   = useState('')
+  const [startDate, setStartDate]           = useState(today())
+  const [endDate, setEndDate]               = useState('')
+  const [isSubmitting, setIsSubmitting]     = useState(false)
+  const [error, setError]                   = useState('')
 
   // Cargar rooms de la propiedad
   const { data: rooms = [] } = useQuery<RoomDto[]>({
@@ -108,44 +128,46 @@ export function BlockModal({
     staleTime: 60_000,
   })
 
-  // Unidades del room seleccionado
   const selectedRoom = rooms.find((r) => r.id === roomId)
   const unitsForRoom: UnitDto[] = (selectedRoom as any)?.units ?? []
 
-  // Si cambia el motivo, ajustar semántica automáticamente
-  useEffect(() => {
-    if (FORCE_OOO.has(reason)) setSemantic(BlockSemantic.OUT_OF_ORDER)
-    else if (FORCE_OOI.has(reason)) setSemantic(BlockSemantic.OUT_OF_INVENTORY)
-  }, [reason])
+  // ── Handlers: reason ↔ semantic sincronizados sin useEffect circular ────────
 
-  // Si cambia la semántica, resetear el motivo al primero válido
-  useEffect(() => {
-    const validReasons = REASONS_BY_SEMANTIC[semantic]
-    if (!validReasons.includes(reason)) setReason(validReasons[0])
-  }, [semantic])
+  const handleReasonChange = (newReason: BlockReason) => {
+    setReason(newReason)
+    // Forced reasons sobreescriben el semantic — son no negociables por operaciones
+    if (FORCE_OOO.has(newReason))      setSemantic(BlockSemantic.OUT_OF_ORDER)
+    else if (FORCE_OOI.has(newReason)) setSemantic(BlockSemantic.OUT_OF_INVENTORY)
+  }
 
-  // Reset al abrir
-  useEffect(() => {
-    if (isOpen) {
-      setScope(prefillUnitId ? 'unit' : 'room')
-      setRoomId(prefillRoomId ?? '')
-      setUnitId(prefillUnitId ?? '')
-      setSemantic(BlockSemantic.OUT_OF_SERVICE)
-      setReason(BlockReason.MAINTENANCE)
-      setNotes('')
-      setInternalNotes('')
-      setStartDate(prefillStartDate ?? today())
-      setEndDate(prefillEndDate ?? '')
-      setError('')
+  const handleSemanticChange = (newSemantic: BlockSemantic) => {
+    setSemantic(newSemantic)
+    // Si el motivo actual no es válido para el nuevo semantic, resetear al primero válido
+    if (!REASONS_BY_SEMANTIC[newSemantic].includes(reason)) {
+      setReason(REASONS_BY_SEMANTIC[newSemantic][0])
     }
+  }
+
+  // Reset completo al abrir el modal
+  useEffect(() => {
+    if (!isOpen) return
+    setScope(prefillUnitId ? 'unit' : 'room')
+    setRoomId(prefillRoomId ?? '')
+    setUnitId(prefillUnitId ?? '')
+    setSemantic(BlockSemantic.OUT_OF_SERVICE)
+    setReason(BlockReason.MAINTENANCE)
+    setNotes('')
+    setInternalNotes('')
+    setStartDate(prefillStartDate ?? today())
+    setEndDate(prefillEndDate ?? '')
+    setError('')
   }, [isOpen, prefillRoomId, prefillUnitId, prefillStartDate, prefillEndDate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-
-    if (scope === 'room' && !roomId) { setError('Selecciona una habitación'); return }
-    if (scope === 'unit' && !unitId) { setError('Selecciona una unidad'); return }
+    if (scope === 'room' && !roomId)  { setError('Selecciona una habitación'); return }
+    if (scope === 'unit' && !unitId)  { setError('Selecciona una unidad'); return }
     if (reason === BlockReason.OTHER && !notes.trim()) {
       setError('Agrega una nota cuando el motivo es "Otro"')
       return
@@ -154,7 +176,6 @@ export function BlockModal({
       setError('La fecha de fin debe ser posterior al inicio')
       return
     }
-
     const dto: CreateBlockDto = {
       ...(scope === 'room' ? { roomId } : { unitId }),
       semantic,
@@ -164,7 +185,6 @@ export function BlockModal({
       startDate,
       endDate: endDate || undefined,
     }
-
     setIsSubmitting(true)
     try {
       await onSubmit(dto)
@@ -177,259 +197,282 @@ export function BlockModal({
 
   if (!isOpen) return null
 
-  const validReasons = REASONS_BY_SEMANTIC[semantic]
-  const semanticForcedByReason = FORCE_OOO.has(reason) || FORCE_OOI.has(reason)
-
-  // Descripciones de semántica para usuarios no técnicos
-  const SEMANTIC_DESCRIPTIONS: Record<BlockSemantic, string> = {
-    [BlockSemantic.OUT_OF_SERVICE]:   'Problema menor. No afecta métricas de revenue. Se puede vender en emergencia.',
-    [BlockSemantic.OUT_OF_ORDER]:     'Unidad inhabilitada. Se remueve del inventario. Requiere aprobación del supervisor.',
-    [BlockSemantic.OUT_OF_INVENTORY]: 'Largo plazo (renovación). Excluida del inventario operativo.',
-    [BlockSemantic.HOUSE_USE]:        'Uso interno: fotografía, capacitación, personal.',
-  }
+  const validReasons    = REASONS_BY_SEMANTIC[semantic]
+  const isForcedSemantic = FORCE_OOO.has(reason) || FORCE_OOI.has(reason)
+  const needsApproval   =
+    semantic === BlockSemantic.OUT_OF_ORDER ||
+    semantic === BlockSemantic.OUT_OF_INVENTORY
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div className="flex min-h-full items-center justify-center p-4">
-        {/* Backdrop */}
-        <div
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm"
-          onClick={onClose}
-        />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
-        {/* Panel */}
-        <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-xl p-6 space-y-5">
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-gray-900">🔒 Nuevo bloqueo</h2>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 text-xl leading-none"
-            >
-              ✕
-            </button>
-          </div>
+      {/* Panel */}
+      <div className="relative w-full max-w-2xl bg-white rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Scope selector */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                ¿Qué deseas bloquear?
-              </label>
-              <div className="flex gap-3">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="scope"
-                    value="unit"
-                    checked={scope === 'unit'}
-                    onChange={() => { setScope('unit'); setUnitId('') }}
-                    className="text-indigo-600"
-                  />
-                  <span className="text-sm text-gray-700">Unidad específica</span>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
+          <h2 className="text-lg font-bold text-gray-900">🔒 Nuevo bloqueo</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex flex-col min-h-0">
+
+          {/* ── 2-column body ──────────────────────────────────────────────── */}
+          <div className="grid grid-cols-2 overflow-y-auto">
+
+            {/* Left — Qué bloquear */}
+            <div className="px-6 py-5 space-y-4 border-r border-gray-100">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                Qué bloquear
+              </p>
+
+              {/* Scope */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  ¿Qué deseas bloquear?
                 </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="scope"
-                    value="room"
-                    checked={scope === 'room'}
-                    onChange={() => { setScope('room'); setUnitId(''); setRoomId('') }}
-                    className="text-indigo-600"
-                  />
-                  <span className="text-sm text-gray-700">Habitación completa</span>
-                </label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio" name="scope" value="unit"
+                      checked={scope === 'unit'}
+                      onChange={() => { setScope('unit'); setUnitId('') }}
+                      className="text-indigo-600"
+                    />
+                    <span className="text-sm text-gray-700">Unidad específica</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio" name="scope" value="room"
+                      checked={scope === 'room'}
+                      onChange={() => { setScope('room'); setUnitId(''); setRoomId('') }}
+                      className="text-indigo-600"
+                    />
+                    <span className="text-sm text-gray-700">Habitación completa</span>
+                  </label>
+                </div>
               </div>
-            </div>
 
-            {/* Room selector (siempre visible para scope unit también) */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Habitación
-              </label>
-              <select
-                value={roomId}
-                onChange={(e) => { setRoomId(e.target.value); setUnitId('') }}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                required={scope === 'room' || scope === 'unit'}
-              >
-                <option value="">— Selecciona habitación —</option>
-                {rooms.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    Hab. {r.number} {r.floor ? `· Piso ${r.floor}` : ''} · {r.category === 'SHARED' ? 'Dormitorio' : 'Privada'}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Unit selector (solo si scope = unit y hay room seleccionada) */}
-            {scope === 'unit' && roomId && (
+              {/* Habitación */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Unidad
+                  Habitación
                 </label>
-                {unitsForRoom.length === 0 ? (
-                  <p className="text-sm text-gray-400 italic">
-                    Esta habitación no tiene unidades registradas
-                  </p>
-                ) : (
-                  <select
-                    value={unitId}
-                    onChange={(e) => setUnitId(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    required
-                  >
-                    <option value="">— Selecciona unidad —</option>
-                    {unitsForRoom.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.label} · {u.status}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                <select
+                  value={roomId}
+                  onChange={(e) => { setRoomId(e.target.value); setUnitId('') }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  required={scope === 'room' || scope === 'unit'}
+                >
+                  <option value="">— Selecciona habitación —</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      Hab. {r.number}{r.floor ? ` · Piso ${r.floor}` : ''} · {r.category === 'SHARED' ? 'Dormitorio' : 'Privada'}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
 
-            {/* Tipo (semántica) */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Tipo de bloqueo
-                {semanticForcedByReason && (
-                  <span className="ml-2 text-xs text-amber-600 font-normal">
-                    (forzado por el motivo seleccionado)
-                  </span>
-                )}
-              </label>
-              <div className="space-y-2">
-                {Object.values(BlockSemantic).map((s) => {
-                  // OOI solo visible para supervisores
-                  if (s === BlockSemantic.OUT_OF_INVENTORY && !isSupervisor) return null
-                  return (
-                    <label
-                      key={s}
-                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                        semantic === s
-                          ? 'border-indigo-500 bg-indigo-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      } ${semanticForcedByReason ? 'opacity-60 pointer-events-none' : ''}`}
+              {/* Unidad (conditional) */}
+              {scope === 'unit' && roomId && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Unidad
+                  </label>
+                  {unitsForRoom.length === 0 ? (
+                    <p className="text-sm text-gray-400 italic">
+                      Esta habitación no tiene unidades registradas
+                    </p>
+                  ) : (
+                    <select
+                      value={unitId}
+                      onChange={(e) => setUnitId(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      required
                     >
-                      <input
-                        type="radio"
-                        name="semantic"
-                        value={s}
-                        checked={semantic === s}
-                        onChange={() => setSemantic(s)}
-                        disabled={semanticForcedByReason}
-                        className="mt-0.5 text-indigo-600"
-                      />
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{SEMANTIC_LABELS[s]}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{SEMANTIC_DESCRIPTIONS[s]}</p>
-                      </div>
-                    </label>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Motivo */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Motivo</label>
-              <select
-                value={reason}
-                onChange={(e) => setReason(e.target.value as BlockReason)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                required
-              >
-                {validReasons.map((r) => (
-                  <option key={r} value={r}>{REASON_LABELS[r]}</option>
-                ))}
-              </select>
-              {FORCE_OOO.has(reason) && (
-                <p className="text-xs text-red-600 mt-1">
-                  ⚠ Este motivo requiere bloqueo OUT_OF_ORDER automáticamente
-                </p>
+                      <option value="">— Selecciona unidad —</option>
+                      {unitsForRoom.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.label} · {u.status}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               )}
-            </div>
 
-            {/* Fechas */}
-            <div className="grid grid-cols-2 gap-3">
+              {/* Tipo de bloqueo (semantic) — 2×2 grid de cards compactas */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Fecha inicio
-                </label>
-                <input
-                  type="date"
-                  value={startDate}
-                  min={today()}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-sm font-medium text-gray-700">
+                    Tipo de bloqueo
+                  </label>
+                  {isForcedSemantic && (
+                    <span className="text-[10px] font-medium text-amber-600">
+                      determinado por el motivo
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {Object.values(BlockSemantic).map((s) => {
+                    if (s === BlockSemantic.OUT_OF_INVENTORY && !isSupervisor) return null
+                    return (
+                      <label
+                        key={s}
+                        className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                          semantic === s
+                            ? 'border-indigo-500 bg-indigo-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="semantic"
+                          value={s}
+                          checked={semantic === s}
+                          onChange={() => handleSemanticChange(s)}
+                          className="mt-0.5 text-indigo-600 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-gray-900 leading-tight">
+                            {SEMANTIC_LABELS[s]}
+                          </p>
+                          <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">
+                            {SEMANTIC_DESCRIPTIONS[s]}
+                          </p>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
               </div>
+
+              {/* Motivo */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Fecha fin <span className="text-gray-400 font-normal">(opcional)</span>
+                  Motivo
                 </label>
-                <input
-                  type="date"
-                  value={endDate}
-                  min={startDate}
-                  onChange={(e) => setEndDate(e.target.value)}
+                <select
+                  value={reason}
+                  onChange={(e) => handleReasonChange(e.target.value as BlockReason)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                />
-                {!endDate && (
-                  <p className="text-xs text-gray-400 mt-0.5">Sin fecha = liberación manual</p>
+                  required
+                >
+                  {validReasons.map((r) => (
+                    <option key={r} value={r}>{REASON_LABELS[r]}</option>
+                  ))}
+                </select>
+                {isForcedSemantic && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    ⚠ Este motivo clasifica la habitación como &ldquo;{SEMANTIC_LABELS[semantic]}&rdquo; automáticamente
+                  </p>
                 )}
               </div>
             </div>
 
-            {/* Notas housekeeping */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Notas para housekeeping
-                {reason === BlockReason.OTHER && <span className="text-red-500 ml-1">*</span>}
-              </label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={2}
-                placeholder={reason === BlockReason.OTHER ? 'Obligatorio cuando el motivo es Otro' : 'Instrucciones para la camarera (opcional)'}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-              />
-            </div>
+            {/* Right — Cuándo y detalles */}
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                Cuándo y detalles
+              </p>
 
-            {/* Notas internas — solo supervisores */}
-            {isSupervisor && (
+              {/* Fechas */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Fecha inicio
+                  </label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    min={today()}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Fecha fin{' '}
+                    <span className="text-gray-400 font-normal">(opcional)</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    min={startDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                  {!endDate && (
+                    <p className="text-[10px] text-gray-400 mt-0.5">
+                      Sin fecha = liberación manual
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Notas housekeeping */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Notas internas <span className="text-gray-400 text-xs font-normal">(solo supervisores)</span>
+                  Notas para housekeeping
+                  {reason === BlockReason.OTHER && (
+                    <span className="text-red-500 ml-1">*</span>
+                  )}
                 </label>
                 <textarea
-                  value={internalNotes}
-                  onChange={(e) => setInternalNotes(e.target.value)}
-                  rows={2}
-                  placeholder="Contexto para supervisores (no visible para housekeeping)"
-                  className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={3}
+                  placeholder={
+                    reason === BlockReason.OTHER
+                      ? 'Obligatorio cuando el motivo es Otro'
+                      : 'Instrucciones para la camarera (opcional)'
+                  }
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
                 />
               </div>
-            )}
 
-            {/* Error */}
+              {/* Notas internas — solo supervisores */}
+              {isSupervisor && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Notas internas{' '}
+                    <span className="text-gray-400 text-xs font-normal">
+                      (solo supervisores)
+                    </span>
+                  </label>
+                  <textarea
+                    value={internalNotes}
+                    onChange={(e) => setInternalNotes(e.target.value)}
+                    rows={3}
+                    placeholder="Contexto para supervisores (no visible para housekeeping)"
+                    className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Footer (full width) ─────────────────────────────────────────── */}
+          <div className="px-6 pb-5 pt-4 border-t border-gray-100 space-y-3 shrink-0">
+            {needsApproval && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                ℹ Este tipo de bloqueo requiere aprobación del supervisor antes de activarse.
+              </div>
+            )}
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
                 {error}
               </div>
             )}
-
-            {/* Info de aprobación */}
-            {(semantic === BlockSemantic.OUT_OF_ORDER || semantic === BlockSemantic.OUT_OF_INVENTORY) && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
-                ℹ Este tipo de bloqueo requiere aprobación del supervisor antes de activarse.
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex gap-3 justify-end pt-1">
+            <div className="flex gap-3 justify-end">
               <button
                 type="button"
                 onClick={onClose}
@@ -445,15 +488,10 @@ export function BlockModal({
                 {isSubmitting ? 'Creando…' : 'Crear solicitud'}
               </button>
             </div>
-          </form>
-        </div>
+          </div>
+
+        </form>
       </div>
     </div>
   )
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function today() {
-  return new Date().toISOString().split('T')[0]
 }

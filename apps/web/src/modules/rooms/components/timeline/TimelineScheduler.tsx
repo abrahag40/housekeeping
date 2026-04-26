@@ -723,6 +723,7 @@ export function TimelineScheduler() {
               onToggleGroup={toggleGroup}
               readinessTasks={readinessTasks}
               lockedRooms={lockedRooms}
+              onBlockRequest={(roomId) => setBlockModal({ roomId })}
             />
           </div>
 
