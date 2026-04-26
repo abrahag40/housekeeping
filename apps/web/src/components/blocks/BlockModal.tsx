@@ -1,18 +1,19 @@
 /**
- * BlockModal v2 — Formulario para crear bloqueos de habitación.
+ * BlockModal v3 — Formulario para crear bloqueos de habitación.
  *
- * Layout: 2 columnas (Qué bloquear | Cuándo y detalles).
- * Baymard Institute (2022): 2 columnas cuando los campos pertenecen a grupos
- * conceptuales distintos y el ancho lo permite.
+ * Layout: 2 columnas balanceadas (Alcance | Tipo + Fechas).
+ * - Columna izquierda: Alcance del bloqueo (scope, habitación, unidad, tipo semántico)
+ * - Columna derecha:   Motivo + Fechas + Instrucciones
  *
- * Decisiones de UX (Sprint 8G):
- * - CTA dinámico: "Crear bloqueo" vs "Solicitar aprobación" (NNGroup H#4 — consistencia)
- * - Motivo visualmente subordinado al tipo — indented con border-l bajo el semantic grid
- * - "Más frecuente" badge en OOS (Cialdini: anchoring del default más seguro)
- * - WCAG 2.2 AA: ring-2 + ✓ en la card seleccionada
- * - Quick-pickers de duración: Hoy / +1 d / +3 d / +7 d
- * - Notas colapsables — no saturan el viewport por defecto
- * - Atajos: Cmd/Ctrl+Enter = submit, Escape = cerrar
+ * Cambios v3 (Sprint 8G — ronda 2):
+ * - Motivo movido a columna derecha para equilibrar alturas
+ * - Segmented control pill en lugar de radios para el alcance
+ * - Cards semánticas sin <input type="radio"> — ARIA puro (role="radiogroup")
+ * - Badge "Más usado" absolute-positioned (uniform card height 84px)
+ * - Tipografía: escala de 4 tamaños (11px / 12px / 14px / 18px)
+ * - × fantasma 24×24 para limpiar fecha fin
+ * - hover:bg-gray-50 en cards no seleccionadas
+ * - Descripciones de card: text-gray-500 (no text-gray-400)
  */
 import { useState, useEffect, useRef } from 'react'
 import { Lock, ChevronDown } from 'lucide-react'
@@ -59,7 +60,7 @@ const REASONS_BY_SEMANTIC: Record<BlockSemantic, BlockReason[]> = {
   ],
 }
 
-// Motivos que fuerzan un semantic específico (problema grave operacional)
+// Motivos que fuerzan un semantic específico
 const FORCE_OOO = new Set([
   BlockReason.PEST_CONTROL,
   BlockReason.WATER_DAMAGE,
@@ -68,7 +69,7 @@ const FORCE_OOO = new Set([
 ])
 const FORCE_OOI = new Set([BlockReason.RENOVATION])
 
-// Descripción breve por semantic — lenguaje del operador, no del sistema
+// Descripción breve por semantic — lenguaje del operador
 const SEMANTIC_DESCRIPTIONS: Record<BlockSemantic, string> = {
   [BlockSemantic.OUT_OF_SERVICE]:   'Problema menor. Venta posible en emergencia.',
   [BlockSemantic.OUT_OF_ORDER]:     'Inhabilitada. Sale del inventario. Requiere aprobación.',
@@ -111,12 +112,12 @@ export function BlockModal({
   prefillStartDate,
   prefillEndDate,
 }: BlockModalProps) {
-  const user       = useAuthStore((s) => s.user)
+  const user         = useAuthStore((s) => s.user)
   const isSupervisor = user?.role === HousekeepingRole.SUPERVISOR
 
   const formRef = useRef<HTMLFormElement>(null)
 
-  const [scope, setScope]                   = useState<'room' | 'unit'>('unit')
+  const [scope, setScope]                   = useState<'unit' | 'room'>('unit')
   const [roomId, setRoomId]                 = useState(prefillRoomId ?? '')
   const [unitId, setUnitId]                 = useState(prefillUnitId ?? '')
   const [semantic, setSemantic]             = useState<BlockSemantic>(BlockSemantic.OUT_OF_SERVICE)
@@ -130,7 +131,6 @@ export function BlockModal({
   const [error, setError]                   = useState('')
   const [showEndDateWarning, setShowEndDateWarning] = useState(false)
 
-  // Cargar rooms de la propiedad
   const { data: rooms = [] } = useQuery<RoomDto[]>({
     queryKey: ['rooms-for-block'],
     queryFn: () => api.get<RoomDto[]>('/rooms'),
@@ -138,10 +138,10 @@ export function BlockModal({
     staleTime: 60_000,
   })
 
-  const selectedRoom   = rooms.find((r) => r.id === roomId)
-  const unitsForRoom: UnitDto[] = (selectedRoom as any)?.units ?? []
+  const selectedRoom              = rooms.find((r) => r.id === roomId)
+  const unitsForRoom: UnitDto[]   = (selectedRoom as any)?.units ?? []
 
-  // ── Handlers: reason ↔ semantic sin useEffect circular ───────────────────
+  // ── reason ↔ semantic — sin useEffect circular ────────────────────────────
 
   const handleReasonChange = (newReason: BlockReason) => {
     setReason(newReason)
@@ -156,12 +156,12 @@ export function BlockModal({
     }
   }
 
-  // Auto-expand notes when reason = OTHER (mandatory note)
+  // Auto-expand notas cuando el motivo es "Otro"
   useEffect(() => {
     if (reason === BlockReason.OTHER) setShowNotes(true)
   }, [reason])
 
-  // Reset al abrir el modal
+  // Reset al abrir
   useEffect(() => {
     if (!isOpen) return
     const start = prefillStartDate ?? isoToday()
@@ -179,14 +179,12 @@ export function BlockModal({
     setShowEndDateWarning(false)
   }, [isOpen, prefillRoomId, prefillUnitId, prefillStartDate, prefillEndDate])
 
-  // Atajos de teclado: Escape → cerrar; Cmd/Ctrl+Enter → submit
+  // Atajos: Escape → cerrar, Cmd/Ctrl+Enter → submit
   useEffect(() => {
     if (!isOpen) return
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { onClose(); return }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-        formRef.current?.requestSubmit()
-      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') formRef.current?.requestSubmit()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
@@ -196,8 +194,8 @@ export function BlockModal({
     e.preventDefault()
     setError('')
 
-    if (scope === 'room' && !roomId)  { setError('Selecciona una habitación'); return }
-    if (scope === 'unit' && !unitId)  { setError('Selecciona una unidad'); return }
+    if (scope === 'room' && !roomId) { setError('Selecciona una habitación'); return }
+    if (scope === 'unit' && !unitId) { setError('Selecciona una unidad'); return }
     if (reason === BlockReason.OTHER && !notes.trim()) {
       setError('Agrega una nota cuando el motivo es "Otro"')
       setShowNotes(true)
@@ -208,7 +206,7 @@ export function BlockModal({
       return
     }
 
-    // Advertencia suave por falta de fecha fin (primer intento)
+    // Advertencia suave — primer intento sin fecha fin
     if (!endDate && !showEndDateWarning) {
       setShowEndDateWarning(true)
       return
@@ -249,6 +247,14 @@ export function BlockModal({
       ? 'Solicitar aprobación'
       : 'Crear bloqueo'
 
+  // ── Quick-pickers config ───────────────────────────────────────────────────
+  const QUICK_PICKS = [
+    { label: 'Hoy',  days: 0 },
+    { label: '+1 d', days: 1 },
+    { label: '+3 d', days: 3 },
+    { label: '+7 d', days: 7 },
+  ]
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
@@ -259,14 +265,15 @@ export function BlockModal({
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
-          <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-            <Lock className="w-4 h-4 text-gray-600" />
+          <h2 className="text-[18px] font-semibold text-gray-900 flex items-center gap-2">
+            <Lock className="w-4 h-4 text-gray-500" />
             Nuevo bloqueo
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            aria-label="Cerrar"
+            className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors text-base leading-none"
           >
             ✕
           </button>
@@ -277,48 +284,46 @@ export function BlockModal({
           {/* ── 2-column body ──────────────────────────────────────────────── */}
           <div className="grid grid-cols-2 overflow-y-auto">
 
-            {/* Left — Qué bloquear */}
+            {/* ─ Left — Alcance del bloqueo ─────────────────────────────── */}
             <div className="px-6 py-5 space-y-4 border-r border-gray-100">
+
               <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                Qué bloquear
+                Alcance del bloqueo
               </p>
 
-              {/* Scope */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  ¿Qué deseas bloquear?
-                </label>
-                <div className="flex gap-4">
-                  <label
-                    className="flex items-center gap-2 cursor-pointer"
-                    title="Una cama o espacio específico dentro de la habitación (ej: Cama 3 del Dorm 2)"
+              {/* Segmented control — scope */}
+              <div
+                role="radiogroup"
+                aria-label="Alcance"
+                className="flex rounded-lg border border-gray-200 p-0.5 bg-gray-50"
+              >
+                {(
+                  [
+                    { value: 'unit', label: 'Unidad específica' },
+                    { value: 'room', label: 'Habitación completa' },
+                  ] as const
+                ).map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={scope === value}
+                    onClick={() => { setScope(value); setUnitId('') }}
+                    className={[
+                      'flex-1 px-3 py-1.5 text-sm rounded-md font-medium transition-colors',
+                      scope === value
+                        ? 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                        : 'text-gray-500 hover:text-gray-700',
+                    ].join(' ')}
                   >
-                    <input
-                      type="radio" name="scope" value="unit"
-                      checked={scope === 'unit'}
-                      onChange={() => { setScope('unit'); setUnitId('') }}
-                      className="text-indigo-600"
-                    />
-                    <span className="text-sm text-gray-700">Unidad específica</span>
-                  </label>
-                  <label
-                    className="flex items-center gap-2 cursor-pointer"
-                    title="Todas las camas/unidades de la habitación quedan bloqueadas"
-                  >
-                    <input
-                      type="radio" name="scope" value="room"
-                      checked={scope === 'room'}
-                      onChange={() => { setScope('room'); setUnitId(''); setRoomId('') }}
-                      className="text-indigo-600"
-                    />
-                    <span className="text-sm text-gray-700">Habitación completa</span>
-                  </label>
-                </div>
+                    {label}
+                  </button>
+                ))}
               </div>
 
               {/* Habitación */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   Habitación
                 </label>
                 <select
@@ -339,7 +344,7 @@ export function BlockModal({
               {/* Unidad (conditional) */}
               {scope === 'unit' && roomId && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
                     Unidad
                   </label>
                   {unitsForRoom.length === 0 ? (
@@ -364,102 +369,109 @@ export function BlockModal({
                 </div>
               )}
 
-              {/* ── Tipo de bloqueo + Motivo (subordinado) ─────────────────── */}
+              {/* Tipo de bloqueo — semantic cards */}
               <div>
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center justify-between mb-2">
                   <label className="text-sm font-medium text-gray-700">
                     Tipo de bloqueo
                   </label>
                   {isForcedSemantic && (
-                    <span className="text-[10px] font-medium text-amber-600">
+                    <span className="text-[11px] font-medium text-amber-600">
                       determinado por el motivo
                     </span>
                   )}
                 </div>
 
-                {/* 2×2 semantic cards */}
-                <div className="grid grid-cols-2 gap-1.5">
+                <div
+                  role="radiogroup"
+                  aria-label="Tipo de bloqueo"
+                  className="grid grid-cols-2 gap-1.5"
+                >
                   {Object.values(BlockSemantic).map((s) => {
                     if (s === BlockSemantic.OUT_OF_INVENTORY && !isSupervisor) return null
                     const isSelected = semantic === s
+                    const isMostUsed = s === BlockSemantic.OUT_OF_SERVICE
                     return (
-                      <label
+                      <div
                         key={s}
+                        role="radio"
+                        aria-checked={isSelected}
+                        tabIndex={0}
+                        onClick={() => handleSemanticChange(s)}
+                        onKeyDown={(e) => {
+                          if (e.key === ' ' || e.key === 'Enter') {
+                            e.preventDefault()
+                            handleSemanticChange(s)
+                          }
+                        }}
                         className={[
-                          'flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors',
+                          'relative p-2 rounded-lg border cursor-pointer transition-colors',
+                          'focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1',
                           isSelected
                             ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-500 ring-offset-1'
-                            : 'border-gray-200 hover:border-gray-300',
+                            : 'border-gray-200 hover:bg-gray-50 hover:border-gray-300',
                         ].join(' ')}
+                        style={{ minHeight: '84px' }}
                       >
-                        <input
-                          type="radio"
-                          name="semantic"
-                          value={s}
-                          checked={isSelected}
-                          onChange={() => handleSemanticChange(s)}
-                          className="mt-0.5 text-indigo-600 shrink-0"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <p className="text-xs font-semibold text-gray-900 leading-tight">
-                              {SEMANTIC_LABELS[s]}
-                            </p>
-                            {s === BlockSemantic.OUT_OF_SERVICE && (
-                              <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1 py-0.5 rounded font-semibold leading-none shrink-0">
-                                Frecuente
-                              </span>
-                            )}
-                            {isSelected && (
-                              <span className="ml-auto text-indigo-600 text-[11px] font-bold leading-none shrink-0">
-                                ✓
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">
-                            {SEMANTIC_DESCRIPTIONS[s]}
-                          </p>
-                        </div>
-                      </label>
+                        {/* Badge "Más usado" o checkmark — top-right absolute */}
+                        {isMostUsed && !isSelected && (
+                          <span className="absolute top-2 right-2 text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-semibold leading-none">
+                            Más usado
+                          </span>
+                        )}
+                        {isSelected && (
+                          <span className="absolute top-2 right-2 text-indigo-600 text-[11px] font-bold leading-none">
+                            ✓
+                          </span>
+                        )}
+
+                        <p className="text-xs font-semibold text-gray-900 leading-tight pr-10">
+                          {SEMANTIC_LABELS[s]}
+                        </p>
+                        <p className="text-[11px] text-gray-500 mt-1 leading-[1.45]">
+                          {SEMANTIC_DESCRIPTIONS[s]}
+                        </p>
+                      </div>
                     )
                   })}
-                </div>
-
-                {/* Motivo — visualmente subordinado al semantic */}
-                <div className="mt-3 pl-3 border-l-2 border-gray-200">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">
-                    Especifica el motivo
-                  </label>
-                  <select
-                    value={reason}
-                    onChange={(e) => handleReasonChange(e.target.value as BlockReason)}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50"
-                    required
-                  >
-                    {validReasons.map((r) => (
-                      <option key={r} value={r}>{REASON_LABELS[r]}</option>
-                    ))}
-                  </select>
-                  {isForcedSemantic && (
-                    <p className="text-[11px] text-amber-600 mt-1">
-                      ⚠ Clasifica la habitación como &ldquo;{SEMANTIC_LABELS[semantic]}&rdquo; automáticamente
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
 
-            {/* Right — Cuándo y detalles */}
+            {/* ─ Right — Motivo + Fechas + Instrucciones ────────────────── */}
             <div className="px-6 py-5 space-y-4">
+
               <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                Cuándo y detalles
+                Tipo y detalles
               </p>
 
+              {/* Motivo */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Motivo
+                </label>
+                <select
+                  value={reason}
+                  onChange={(e) => handleReasonChange(e.target.value as BlockReason)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  required
+                >
+                  {validReasons.map((r) => (
+                    <option key={r} value={r}>{REASON_LABELS[r]}</option>
+                  ))}
+                </select>
+                {isForcedSemantic && (
+                  <p className="text-[11px] text-amber-600 mt-1.5">
+                    ⚠ Clasifica la habitación como &ldquo;{SEMANTIC_LABELS[semantic]}&rdquo; automáticamente
+                  </p>
+                )}
+              </div>
+
               {/* Fechas */}
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       Fecha inicio
                     </label>
                     <input
@@ -468,38 +480,45 @@ export function BlockModal({
                       min={isoToday()}
                       onChange={(e) => {
                         setStartDate(e.target.value)
-                        // mantener la duración relativa si hay endDate
                         if (endDate) setEndDate(addDaysToIso(e.target.value, 1))
                         setShowEndDateWarning(false)
                       }}
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                     />
                   </div>
+
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       Fecha fin{' '}
                       <span className="text-gray-400 font-normal">(opcional)</span>
                     </label>
-                    <input
-                      type="date"
-                      value={endDate}
-                      min={startDate}
-                      onChange={(e) => { setEndDate(e.target.value); setShowEndDateWarning(false) }}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    />
+                    <div className="relative flex items-center">
+                      <input
+                        type="date"
+                        value={endDate}
+                        min={startDate}
+                        onChange={(e) => { setEndDate(e.target.value); setShowEndDateWarning(false) }}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                      {endDate && (
+                        <button
+                          type="button"
+                          onClick={() => { setEndDate(''); setShowEndDateWarning(false) }}
+                          title="Limpiar fecha fin"
+                          className="absolute right-1.5 w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-red-400 transition-colors text-[13px] leading-none"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                {/* Quick-pickers de duración */}
+                {/* Quick-pickers */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-[11px] text-gray-400 shrink-0">Duración:</span>
-                  {[
-                    { label: 'Hoy', days: 0 },
-                    { label: '+1 d', days: 1 },
-                    { label: '+3 d', days: 3 },
-                    { label: '+7 d', days: 7 },
-                  ].map(({ label, days }) => {
-                    const target = addDaysToIso(startDate, days)
+                  {QUICK_PICKS.map(({ label, days }) => {
+                    const target   = addDaysToIso(startDate, days)
                     const isActive = endDate === target
                     return (
                       <button
@@ -517,25 +536,10 @@ export function BlockModal({
                       </button>
                     )
                   })}
-                  {endDate && (
-                    <button
-                      type="button"
-                      onClick={() => { setEndDate(''); setShowEndDateWarning(false) }}
-                      className="px-2 py-0.5 rounded-full text-[11px] font-medium border bg-gray-100 text-gray-400 hover:text-red-500 hover:bg-red-50 border-transparent transition-colors"
-                      title="Quitar fecha de fin (bloqueo indefinido)"
-                    >
-                      ✕
-                    </button>
-                  )}
                 </div>
-                {!endDate && (
-                  <p className="text-[10px] text-gray-400">
-                    Sin fecha = liberación manual
-                  </p>
-                )}
               </div>
 
-              {/* Notas — colapsables */}
+              {/* Instrucciones — colapsables */}
               <div>
                 <button
                   type="button"
@@ -556,10 +560,9 @@ export function BlockModal({
                 </button>
 
                 {showNotes && (
-                  <div className="mt-2 space-y-3">
-                    {/* Notas housekeeping */}
+                  <div className="mt-3 space-y-3">
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">
+                      <label className="block text-xs font-medium text-gray-500 mb-1.5">
                         Para housekeeping
                         {reason === BlockReason.OTHER && (
                           <span className="text-red-500 ml-1">*</span>
@@ -578,10 +581,9 @@ export function BlockModal({
                       />
                     </div>
 
-                    {/* Notas internas — solo supervisores */}
                     {isSupervisor && (
                       <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">
+                        <label className="block text-xs font-medium text-gray-500 mb-1.5">
                           Notas internas{' '}
                           <span className="text-gray-400 font-normal">(solo supervisores)</span>
                         </label>
@@ -600,7 +602,7 @@ export function BlockModal({
             </div>
           </div>
 
-          {/* ── Footer (full width) ─────────────────────────────────────────── */}
+          {/* ── Footer ─────────────────────────────────────────────────────── */}
           <div className="px-6 pb-5 pt-4 border-t border-gray-100 space-y-3 shrink-0">
             {needsApproval && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
@@ -618,6 +620,7 @@ export function BlockModal({
                 {error}
               </div>
             )}
+
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-300 hidden sm:block">
                 ⌘ Enter para confirmar · Esc para cerrar
