@@ -18,6 +18,7 @@ export interface RoomRow {
 
 export interface GuestStayBlock {
   id: string
+  bookingRef?: string
   roomId: string
   guestName: string
   checkIn: Date

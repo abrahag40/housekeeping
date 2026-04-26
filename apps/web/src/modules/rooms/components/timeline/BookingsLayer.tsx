@@ -4,8 +4,23 @@ import { TIMELINE } from '../../utils/timeline.constants'
 import { BookingBlock } from './BookingBlock'
 import type { GuestStayBlock, FlatRow, DragState } from '../../types/timeline.types'
 
+/** Room+date range of a no-show block that collides with an active booking. */
+export type NsCollisionRange = { roomId: string; checkIn: Date; checkOut: Date }
+
 interface BookingsLayerProps {
   stays: GuestStayBlock[]
+  /**
+   * Pre-computed from TimelineScheduler using UNFILTERED data (independent of hideNoShows).
+   * IDs of NS blocks to collapse into a thin 8px stripe — because an active booking
+   * occupies the same room+dates.
+   */
+  nsStripeIds?: Set<string>
+  /**
+   * Pre-computed from TimelineScheduler using UNFILTERED data (independent of hideNoShows).
+   * Room+date ranges of NS blocks that collide with an active booking — used to shift
+   * the active block down by 10px so they don't overlap.
+   */
+  nsCollisionRanges?: NsCollisionRange[]
   flatRows: FlatRow[]
   days: Date[]
   dayWidth: number
@@ -19,6 +34,7 @@ interface BookingsLayerProps {
   onNoShow?: (stayId: string) => void
   onStartCheckin?: (stayId: string) => void
   onRevertNoShow?: (stayId: string) => void
+  onOpenDetail?: (stayId: string) => void
   potentialNoShowWarningHour?: number
   noShowCutoffHour?: number
   lockedStays?: Set<string>
@@ -30,6 +46,18 @@ interface BookingsLayerProps {
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
+
+// Returns true if `stay` overlaps with any NS collision range in the same room.
+// Uses room+date comparison — robust against ID mismatches between stays/journeyStays.
+function hasNsAboveCheck(stay: GuestStayBlock, ranges: NsCollisionRange[]): boolean {
+  if (stay.noShowAt) return false
+  return ranges.some(
+    (r) =>
+      r.roomId === stay.roomId &&
+      r.checkIn  < stay.checkOut &&
+      r.checkOut > stay.checkIn,
+  )
+}
 
 // Compare two dates by calendar day only (ignores time-of-day).
 // Used to match predecessor.checkOut with segment.checkIn — the API may store
@@ -101,6 +129,8 @@ function buildActiveStayIds(
 
 export function BookingsLayer({
   stays,
+  nsStripeIds: nsStripeIdsProp = new Set<string>(),
+  nsCollisionRanges: nsCollisionRangesProp = [],
   flatRows,
   days,
   dayWidth,
@@ -114,6 +144,7 @@ export function BookingsLayer({
   onNoShow,
   onStartCheckin,
   onRevertNoShow,
+  onOpenDetail,
   potentialNoShowWarningHour,
   noShowCutoffHour,
   lockedStays,
@@ -164,6 +195,12 @@ export function BookingsLayer({
       sum + (row.type === 'group' ? TIMELINE.GROUP_HEADER_HEIGHT : TIMELINE.ROW_HEIGHT),
     0,
   )
+
+  // nsStripeIds and nsCollisionRanges are pre-computed in TimelineScheduler from
+  // UNFILTERED data — completely independent of the hideNoShows toggle. Using them
+  // directly here ensures active blocks always shift when NS is toggled visible.
+  const nsStripeIds     = nsStripeIdsProp
+  const nsCollisionRanges = nsCollisionRangesProp
 
   // IDs of all stays that belong to the active journey (segments + predecessors).
   // Used for dimmed logic so original stays aren't incorrectly dimmed.
@@ -357,6 +394,7 @@ export function BookingsLayer({
             onNoShow={onNoShow}
             onStartCheckin={onStartCheckin}
             onRevertNoShow={onRevertNoShow}
+            onOpenDetail={onOpenDetail}
             potentialNoShowWarningHour={potentialNoShowWarningHour}
             noShowCutoffHour={noShowCutoffHour}
             isLocked={lockedStays?.has(stay.id)}
@@ -364,6 +402,8 @@ export function BookingsLayer({
             scrollLeft={scrollLeft}
             dimmed={activeJourneyId !== null && !activeStayIds.has(stay.id)}
             isInActiveJourney={activeJourneyId !== null && activeStayIds.has(stay.id)}
+            isNsStripe={nsStripeIds.has(stay.id)}
+            hasNsAbove={hasNsAboveCheck(stay, nsCollisionRanges)}
           />
         )
       })}
@@ -387,6 +427,7 @@ export function BookingsLayer({
             onNoShow={onNoShow}
             onStartCheckin={onStartCheckin}
             onRevertNoShow={onRevertNoShow}
+            onOpenDetail={onOpenDetail}
             potentialNoShowWarningHour={potentialNoShowWarningHour}
             noShowCutoffHour={noShowCutoffHour}
             isLocked={lockedStays?.has(stay.id)}
@@ -394,6 +435,8 @@ export function BookingsLayer({
             scrollLeft={scrollLeft}
             dimmed={activeJourneyId !== null && !activeStayIds.has(stay.id)}
             isInActiveJourney={activeJourneyId !== null && activeStayIds.has(stay.id)}
+            isNsStripe={nsStripeIds.has(stay.id)}
+            hasNsAbove={hasNsAboveCheck(stay, nsCollisionRanges)}
           />
         )
       })}

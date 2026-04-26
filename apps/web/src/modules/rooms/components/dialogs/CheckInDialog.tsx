@@ -2,7 +2,7 @@ import { useSoftLock } from '@/hooks/useSoftLock'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input'
 import 'react-phone-number-input/style.css'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -20,7 +20,7 @@ import { format, addDays, isSameDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { User, CreditCard, CheckCircle,
          ChevronRight, ChevronLeft,
-         AlertCircle, Camera, Moon, Loader2, Ban } from 'lucide-react'
+         AlertCircle, Moon, Loader2, Ban } from 'lucide-react'
 import { guestStaysApi } from '../../api/guest-stays.api'
 import type { AvailabilityConflict } from '@zenix/shared'
          
@@ -146,12 +146,7 @@ export function CheckInDialog({
   // Other receptionists viewing the same calendar see a 🔒 badge on this room.
   useSoftLock(open && initialRoomId ? initialRoomId : null, propertyId ?? null)
   const [step, setStep] = useState(1)
-  const [docPreview, setDocPreview] = useState<string | null>(null)
   const [showCancelAlert, setShowCancelAlert] = useState(false)
-  const [cameraError, setCameraError] = useState<string | null>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const [showCamera, setShowCamera] = useState(false)
 
   // ── AVAILABILITY STATE ──
   // 'idle'      — no check run yet (dates not set or just reset)
@@ -171,7 +166,6 @@ export function CheckInDialog({
     defaultValues: {
       firstName: '', lastName: '', guestEmail: '',
       guestPhone: '', nationality: '',
-      documentType: '', documentPhoto: '',
       adults: 1, children: 0,
     },
   })
@@ -199,7 +193,6 @@ export function CheckInDialog({
     f1.reset({
       firstName: '', lastName: '', guestEmail: '',
       guestPhone: '', nationality: '',
-      documentType: '', documentPhoto: '',
       adults: 1, children: 0,
     })
     f2.reset({
@@ -208,12 +201,9 @@ export function CheckInDialog({
       currency:      'USD', source: 'walk-in', otaName: 'Walk-in',
       amountPaid: 0, paymentMethod: 'cash', notes: '',
     })
-    setDocPreview(null)
     setStep(1)
-    setShowCamera(false)
     setAvailStatus('idle')
     setAvailConflicts([])
-    stopCamera()
   }, [open]) // eslint-disable-line
 
   // Detectar si hay datos para la alerta de cierre
@@ -267,67 +257,6 @@ export function CheckInDialog({
   }
 
   // ── CÁMARA ──
-  async function startCamera() {
-    setCameraError(null)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
-      })
-      streamRef.current = stream
-      setShowCamera(true)
-      // Esperar el próximo render para que el video esté montado
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          videoRef.current.play()
-        }
-      }, 100)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : ''
-      if (msg.includes('NotFoundError') || msg.includes('DevicesNotFound')) {
-        setCameraError('No se detectó cámara. Usa el botón de archivo para subir la foto.')
-      } else if (msg.includes('NotAllowedError')) {
-        setCameraError('Permiso de cámara denegado. Habilítalo en la configuración del navegador.')
-      } else {
-        setCameraError('No se pudo acceder a la cámara.')
-      }
-    }
-  }
-
-  function stopCamera() {
-    streamRef.current?.getTracks().forEach(t => t.stop())
-    streamRef.current = null
-    setShowCamera(false)
-  }
-
-  function capturePhoto() {
-    if (!videoRef.current) return
-    const canvas = document.createElement('canvas')
-    canvas.width  = videoRef.current.videoWidth
-    canvas.height = videoRef.current.videoHeight
-    canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-    setDocPreview(dataUrl)
-    f1.setValue('documentPhoto', dataUrl)
-    stopCamera()
-  }
-
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (file.size > 5 * 1024 * 1024) {
-      alert('Máximo 5MB')
-      return
-    }
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const b64 = ev.target?.result as string
-      setDocPreview(b64)
-      f1.setValue('documentPhoto', b64)
-    }
-    reader.readAsDataURL(file)
-  }
-
   // ── VALORES CALCULADOS ──
   // `ratePerNight` and `amountPaid` go through `z.coerce.number()`, so their
   // input type is `unknown`. Coerce here so the arithmetic below is typed.
@@ -503,97 +432,6 @@ export function CheckInDialog({
                       )}
                     />
                   </div>
-                </div>
-
-                {/* Tipo documento */}
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold text-slate-600">
-                    Tipo de documento
-                  </Label>
-                  <Controller
-                    name="documentType" control={f1.control}
-                    render={({ field }) => (
-                      <Select modal={false} value={field.value} onValueChange={field.onChange}>
-                        <SelectTrigger className="h-9 text-sm bg-white w-48">
-                          <SelectValue placeholder="Seleccionar" />
-                        </SelectTrigger>
-                        <SelectContent position="popper" avoidCollisions={false} className="z-[99999]">
-                          <SelectItem value="passport">Pasaporte</SelectItem>
-                          <SelectItem value="id">ID Nacional / INE</SelectItem>
-                          <SelectItem value="drivers">Licencia de conducir</SelectItem>
-                          <SelectItem value="other">Otro</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                </div>
-
-                {/* Foto del documento */}
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold text-slate-600">
-                    Foto del documento{' '}
-                    <span className="text-slate-400 font-normal">(opcional)</span>
-                  </Label>
-
-                  {/* Preview */}
-                  {docPreview && !showCamera && (
-                    <div className="relative rounded-lg overflow-hidden border border-slate-200">
-                      <img src={docPreview} alt="Documento"
-                           className="w-full h-36 object-cover" />
-                      <button type="button" onClick={() => { setDocPreview(null); f1.setValue('documentPhoto','') }}
-                              className="absolute top-2 right-2 w-6 h-6 bg-black/50 rounded-full
-                                         text-white text-xs flex items-center justify-center">
-                        ×
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Visor de cámara */}
-                  {showCamera && (
-                    <div className="relative rounded-lg overflow-hidden border border-slate-300 bg-black">
-                      <video ref={videoRef} className="w-full h-48 object-cover" muted playsInline />
-                      <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2">
-                        <Button type="button" size="sm" onClick={capturePhoto}
-                                className="bg-white text-slate-800 hover:bg-slate-100 text-xs">
-                          <Camera className="h-3.5 w-3.5 mr-1" />Capturar
-                        </Button>
-                        <Button type="button" size="sm" variant="ghost"
-                                onClick={stopCamera}
-                                className="bg-black/50 text-white hover:bg-black/70 text-xs">
-                          Cancelar
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Error de cámara */}
-                  {cameraError && (
-                    <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100
-                                  rounded px-2 py-1.5">{cameraError}</p>
-                  )}
-
-                  {/* Botones de acción */}
-                  {!showCamera && !docPreview && (
-                    <div className="flex gap-2">
-                      <button type="button" onClick={startCamera}
-                              className="flex-1 flex flex-col items-center justify-center
-                                         border-2 border-dashed border-slate-200 rounded-lg p-3
-                                         cursor-pointer hover:border-slate-300 hover:bg-slate-50
-                                         transition-colors bg-white gap-1">
-                        <Camera className="h-5 w-5 text-slate-300" />
-                        <span className="text-xs text-slate-400">Usar cámara</span>
-                      </button>
-                      <label className="flex-1 flex flex-col items-center justify-center
-                                        border-2 border-dashed border-slate-200 rounded-lg p-3
-                                        cursor-pointer hover:border-slate-300 hover:bg-slate-50
-                                        transition-colors bg-white gap-1">
-                        <span className="text-lg">📁</span>
-                        <span className="text-xs text-slate-400">Subir archivo</span>
-                        <input type="file" accept="image/*" className="hidden"
-                               onChange={handleFileUpload} />
-                      </label>
-                    </div>
-                  )}
                 </div>
 
                 {/* Nacionalidad / Huéspedes */}

@@ -1,7 +1,58 @@
 # CLAUDE.md — Zenix PMS
 
 > Guía para retomar el proyecto desde cero. Lee esto antes de tocar código.
-> Última actualización: 2026-04-25 (Sprint 7B ✅ + 7C ✅ + 7D ✅ + 8 ✅ + 8E ✅ + 8F ✅ completos; Sprint 8F — Ventana temporal de no-show con día hotelero real: `potentialNoShowWarningHour` + `noShowCutoffHour`; botón "Revertir no-show" en tooltip; guard backend anti-precipitación; Channex gateway integrado; Cloudbeds eliminado).
+> Última actualización: 2026-04-26 (Sprint 8G ✅ — NS stripe collision detection + UI rediseñada; fix memo comparator; fix night audit re-marcando no-shows revertidos; booking ref en tooltip).
+
+---
+
+## Principio de Debate Epistémico — Colaboración Activa (No Negociable)
+
+> **Este principio rige CADA conversación, decisión de diseño y propuesta de funcionalidad. Su propósito es proteger la integridad del PMS ante el desconocimiento parcial — tanto del desarrollador como del asistente.**
+
+**En cada petición, mi verdad no es la única verdad.** Puedes y debes debatir cualquier argumento con justificaciones sólidas, con la finalidad de encontrar una verdad que cumpla con la creación de un PMS definitivo — sin intuición ni suposiciones.
+
+### Base de conocimiento obligatoria para el debate
+
+Todo argumento o contrapropuesta debe estar fundamentado en al menos una de estas cuatro fuentes:
+
+**1. Software engineering — estudios comprobados:**
+- Nielsen Norman Group (NNGroup) — usabilidad, patterns de diseño, eyetracking studies
+- Baymard Institute — benchmarks de UX para sistemas de gestión y e-commerce B2B
+- Apple Human Interface Guidelines (HIG) — decisiones de interacción y jerarquía visual
+- ISO 9241-110:2020 — principios de ergonomía de sistemas interactivos
+- WCAG 2.1 AA — accesibilidad
+- Estudios de carga cognitiva (Sweller 1988), Hick (1952), Fitts (1954), Kahneman (2011), Von Restorff (1933)
+
+**2. Hotelería — procesos estándarizados de la industria:**
+- AHLEI (American Hotel & Lodging Educational Institute) — estándares operativos de front desk y housekeeping
+- ISAHC (International Society of Accommodation and Hospitality Consultants) — auditoría de no-shows y chargebacks
+- HFTP (Hospitality Financial and Technology Professionals) — gestión fiscal hotelera, USALI
+- Opera Cloud, Mews, Cloudbeds, Clock PMS+, Little Hotelier — comportamiento documentado y sentimiento de usuarios (foros, Capterra, TrustRadius, LinkedIn user groups)
+- Visa/Mastercard Core Rules — evidencia requerida para disputas de chargeback en hotelería
+
+**3. Cumplimiento fiscal LATAM:**
+- CFDI 4.0 (México SAT) — facturación electrónica de cargos hoteleros
+- DIAN (Colombia) — equivalente al SAT para registros de ingreso
+- SUNAT (Perú) — mismo propósito
+- GDPR / LGPD — anonimización de PII manteniendo registros fiscales
+
+**4. Neuromarketing y psicología del consumidor:**
+- Mehrabian-Russell (1974) — psicología del color en decisiones
+- Cialdini (1984) — principio de escasez visual y urgencia
+- Csikszentmihalyi (1990) — estado de flujo en operadores
+- Tversky & Kahneman (1981) — efecto de encuadre en confirmaciones
+
+### Por qué este principio existe
+
+El desarrollador puede desconocer procesos hoteleros estandarizados que parecen detalles pero que comprometen la operación real del hotel. El asistente puede asumir premisas de UX que son correctas en general pero incorrectas para el contexto específico de la recepción hotelera. **El debate fundamentado protege al sistema de ambos sesgos.**
+
+Ejemplo del principio en acción: si el desarrollador propone eliminar el bloque NS del calendario para simplificar la vista, el asistente debe debatir con §34 de este documento (cumplimiento fiscal, evidencia de chargeback Visa/Mastercard §5.9.2) — no simplemente acatar la instrucción.
+
+### Actualización automática del documento de ventas
+
+**Cada vez que se agrega, modifica o justifica una funcionalidad del sistema, el archivo `docs/zenix-sales-master.md` debe actualizarse en la misma sesión.** Este documento es la fuente de verdad comercial de Zenix — debe reflejar exactamente lo que el sistema hace hoy y por qué es mejor que la competencia.
+
+La actualización del documento de ventas NO es opcional. Si una funcionalidad nueva no aparece en `zenix-sales-master.md`, no existe para el equipo comercial.
 
 ---
 
@@ -350,6 +401,28 @@ function toLocalHour(date: Date, timezone: string): number {
 ```
 **Archivo:** `apps/api/src/pms/guest-stays/night-audit.scheduler.ts`
 **NUNCA** usar `new Date().toLocaleDateString()` sin timezone explícito. Siempre pasar el timezone de la propiedad.
+
+### 15b. Guard anti-re-marcado: `noShowRevertedAt: null` en el night audit
+
+**Problema:** Al revertir un no-show, `noShowAt` vuelve a `null`. Si el audit nocturno corre después (para el mismo día hotelero o el siguiente antes del cutoff), el stay es elegible de nuevo por el filtro `noShowAt: null` → se vuelve a marcar automáticamente.
+
+**Contexto:** El marcado MANUAL de no-show (`markAsNoShow`) NO actualiza `noShowProcessedDate` — solo el audit lo hace. Por tanto, si el usuario marca y revierte antes de que el audit corra, la propiedad puede tener `noShowProcessedDate = null` y el audit re-marcará el stay esa misma noche.
+
+**Decisión:** El `NightAuditScheduler` incluye `noShowRevertedAt: null` en el `findMany`. Cualquier stay que haya sido revertido alguna vez queda excluido del auto-marcado permanentemente. Si el recepcionista decide que SÍ es un no-show después de revertir, debe marcarlo manualmente — el sistema no lo hace automáticamente.
+
+```typescript
+// night-audit.scheduler.ts — query de stays a procesar
+const overdueStays = await this.prisma.guestStay.findMany({
+  where: {
+    ...
+    noShowAt:         null,
+    noShowRevertedAt: null, // ← guard: no re-marcar stays revertidos
+    checkinAt: { gte: dayStart, lte: dayEnd },
+  },
+})
+```
+
+**Consecuencia intencional:** Un stay revertido queda como UNCONFIRMED permanentemente hasta que el recepcionista confirme llegada o lo marque manualmente. El audit ya no toca ese stay.
 
 ### 15. Idempotencia del night audit — `noShowProcessedDate`
 **Problema:** El cron corre cada 30 min. Sin guardia, procesaría no-shows múltiples veces en el mismo día local.
@@ -1501,6 +1574,15 @@ OPEN → ACKNOWLEDGED → IN_PROGRESS → RESOLVED → VERIFIED → CLOSED
 
 ## Known Issues & Edge Cases
 
+### Resueltos en Sprint 8G (sesión actual)
+
+| Issue | Causa | Fix |
+|-------|-------|-----|
+| Night audit re-marcaba no-shows revertidos | El query de `NightAuditScheduler` no excluía stays con `noShowRevertedAt != null`. Al revertir, `noShowAt = null` volvía a hacer elegible al stay. | Agregar `noShowRevertedAt: null` al `findMany` del audit (`night-audit.scheduler.ts:149`) |
+| Bloques no se re-renderizaban al toggle "Mostrar no-shows" | `BookingBlock.memo` tenía un comparador custom que omitía `isNsStripe` y `hasNsAbove` → React saltaba el re-render aunque los props cambiaran | Agregar `prev.isNsStripe === next.isNsStripe && prev.hasNsAbove === next.hasNsAbove` al comparador |
+| `useRevertNoShow` no refrescaba la vista de journeys | `onSuccess` solo invalidaba `['guest-stays']`, no `['stay-journeys-timeline']` | Agregar la segunda invalidación en `useGuestStays.ts` |
+| NS stripe bloques con journey status NO_SHOW eran invisibles | `findActiveForTimeline` filtraba `status: 'ACTIVE'` → journeys en NO_SHOW excluidos | Cambiar a `status: { in: ['ACTIVE', 'NO_SHOW'] }` |
+
 ### Resueltos en Sesión 6
 
 | Issue | Causa | Fix |
@@ -1794,6 +1876,11 @@ npx prisma studio
 | ConfirmCheckinDialog (4 pasos + pagos) | ✅ Sprint 8 | `ConfirmCheckinDialog.tsx`, `TimelineScheduler.tsx` |
 | PaymentLog append-only (CASH/CARD/OTA/COMP) | ✅ Sprint 8 | `PaymentLog` Prisma, `confirmCheckin` endpoint, `useConfirmCheckin` |
 | Check-in certificado AHLEI: doc + keyType + arrivalNotes | ✅ Sprint 8E | `ConfirmCheckinDialog.tsx`, `confirm-checkin.dto.ts`, `KeyDeliveryType` enum |
+| Ventana temporal de no-show (día hotelero real) | ✅ Sprint 8F | `timeline.utils.ts`, `BookingBlock.tsx`, `guest-stays.service.ts` |
+| NS stripe collision detection + toggle "Mostrar/Ocultar" | ✅ Sprint 8G | `BookingsLayer.tsx`, `TimelineScheduler.tsx`, `BookingBlock.tsx` |
+| NS stripe UI: badge NS + nombre, rayas sutiles, 14px alto | ✅ Sprint 8G | `BookingBlock.tsx` |
+| Booking ref en tooltip de reserva | ✅ Sprint 8G | `TooltipPortal.tsx`, `GuestStayBlock`, `GuestStayDto` |
+| UNCONFIRMED color azul (antes amber → confundía con advisory) | ✅ Sprint 8G | `timeline.constants.ts` |
 | OccupancyFooter color por ocupación | ⏳ Sprint 7A pendiente | `TimelineGrid.tsx` |
 | Stayover tasks automáticas | ⏳ P1 Roadmap | `StayoverService` |
 | KanbanPage (supervisor board) | ⚠️ Esqueleto | `KanbanPage.tsx` |

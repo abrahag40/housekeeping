@@ -20,6 +20,7 @@ function adaptStay(raw: Record<string, unknown>): GuestStayBlock {
   const stayJourney = raw.stayJourney as { id: string } | null | undefined
   return {
     id:               raw.id as string,
+    bookingRef:       raw.bookingRef as string | undefined,
     roomId:           raw.roomId as string,
     guestName:        raw.guestName as string,
     journeyId:        stayJourney?.id ?? undefined,
@@ -130,7 +131,7 @@ export function useCreateGuestStay(propertyId: string) {
         otaName: ota?.label ?? data.source,
         paxCount: (data.adults ?? 1) + (data.children ?? 0),
         isLocked: false,
-        pmsReservationId: 'temp-' + Date.now(),
+        bookingRef: undefined,
       }
 
       // Insertar en cada cache activo de guest-stays
@@ -264,6 +265,7 @@ export function useRevertNoShow(propertyId: string) {
       api.post(`/v1/guest-stays/${stayId}/revert-no-show`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['guest-stays', propertyId], exact: false, refetchType: 'active' })
+      qc.invalidateQueries({ queryKey: ['stay-journeys-timeline', propertyId], exact: false, refetchType: 'active' })
       toast.success('No-show revertido')
     },
     onError: (err: Error) => {

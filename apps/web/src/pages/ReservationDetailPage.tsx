@@ -366,7 +366,10 @@ export function ReservationDetailPage() {
           </SectionCard>
 
           <SectionCard>
-            <InfoRow icon={Hash}  label="ID de reserva" value={data.id} mono copyable />
+            {data.bookingRef && (
+              <InfoRow icon={Hash} label="Referencia" value={data.bookingRef} mono copyable />
+            )}
+            <InfoRow icon={Hash}  label="ID interno" value={data.id} mono copyable />
             <InfoRow icon={Clock} label="Creada"
               value={format(new Date(data.createdAt), "dd/MM/yyyy HH:mm", { locale: es })} />
             <InfoRow icon={Clock} label="Actualizada"

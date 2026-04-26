@@ -312,7 +312,7 @@ export function TimelineScheduler() {
   }, [journeyBlocks, flatRows, stays])
 
   // ─── No-show filter toggle (§34 — default visible) ──────────────────────────
-  const [hideNoShows, setHideNoShows] = useState(false)
+  const [hideNoShows, setHideNoShows] = useState(true)
 
   // ─── Journey highlight (lifted from BookingsLayer for cross-component sync) ──
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null)
@@ -397,6 +397,27 @@ export function TimelineScheduler() {
     () => stays.filter((s) => !s.journeyId),
     [stays],
   )
+
+  // NS collision detection — computed from COMPLETE unfiltered data so the result
+  // is independent of the hideNoShows toggle. nsStripeIds marks which NS blocks
+  // to render as thin stripes; nsCollisionRanges tells active blocks to shift down.
+  const { nsStripeIds, nsCollisionRanges } = useMemo(() => {
+    const allBlocks = [...staysWithoutJourneys, ...journeyBlocks]
+    const noShows   = allBlocks.filter((b) => !!b.noShowAt)
+    const activos   = allBlocks.filter((b) => !b.noShowAt)
+    const stripeIds = new Set<string>()
+    const ranges: Array<{ roomId: string; checkIn: Date; checkOut: Date }> = []
+    for (const ns of noShows) {
+      const collides = activos.some(
+        (a) => ns.roomId === a.roomId && ns.checkIn < a.checkOut && ns.checkOut > a.checkIn,
+      )
+      if (collides) {
+        stripeIds.add(ns.id)
+        ranges.push({ roomId: ns.roomId, checkIn: ns.checkIn, checkOut: ns.checkOut })
+      }
+    }
+    return { nsStripeIds: stripeIds, nsCollisionRanges: ranges }
+  }, [staysWithoutJourneys, journeyBlocks])
 
   // Merge journeyBlocks into conflict detection so dragging a stay
   // can't overwrite a pre-planned ROOM_MOVE/EXTENSION segment.
@@ -761,6 +782,8 @@ export function TimelineScheduler() {
 
             <BookingsLayer
               stays={hideNoShows ? staysWithoutJourneys.filter((s) => !s.noShowAt) : staysWithoutJourneys}
+              nsStripeIds={hideNoShows ? undefined : nsStripeIds}
+              nsCollisionRanges={hideNoShows ? undefined : nsCollisionRanges}
               flatRows={flatRows}
               days={days}
               dayWidth={dayWidth}
@@ -785,12 +808,13 @@ export function TimelineScheduler() {
               onRevertNoShow={(stayId) => {
                 revertNoShowMut.mutate(stayId)
               }}
+              onOpenDetail={openSheet}
               potentialNoShowWarningHour={potentialNoShowWarningHour}
               noShowCutoffHour={noShowCutoffHour}
               lockedStays={lockedStays}
               onToggleLock={toggleLock}
               scrollLeft={scrollLeft}
-              journeyStays={journeyBlocks}
+              journeyStays={hideNoShows ? journeyBlocks.filter((s) => !s.noShowAt) : journeyBlocks}
               activeJourneyId={activeJourneyId}
               onSetActiveJourneyId={handleSetActiveJourneyId}
             />

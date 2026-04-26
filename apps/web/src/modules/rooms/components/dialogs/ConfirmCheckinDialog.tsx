@@ -4,15 +4,11 @@
  * Distinto de CheckInDialog (crea reservas walk-in).
  * Este dialog confirma la llegada de una reserva EXISTENTE con status UNCONFIRMED.
  *
- * 4 pasos (AHLEI canónico):
+ * 4 pasos:
  *  1. Verificación de datos del huésped + notas de llegada
- *  2. Identidad — tipo doc + número + checkbox de verificación física
- *  3. Pago — registrar método + monto + referencia
- *  4. Entrega de acceso (keyType) + resumen + confirmar
- *
- * Fundamento: CLAUDE.md §32 (confirmación explícita), §Psicología cognitiva,
- * J.D. Power (≤4 pasos), ACFE (anti-fraude cash skimming),
- * Visa Core Rules §5.9.2 (documentación de identidad para chargebacks).
+ *  2. Identidad — tipo doc (foto Enterprise)
+ *  3. Pago — registrar método + monto + referencia (split permitido)
+ *  4. Resumen + confirmar
  */
 import { useState } from 'react'
 import { format } from 'date-fns'
@@ -20,7 +16,7 @@ import { es } from 'date-fns/locale'
 import {
   LogIn, ChevronRight, ChevronLeft, Check, ShieldCheck,
   CreditCard, Loader2, AlertTriangle, User, Calendar, Moon, Hash,
-  KeyRound, Smartphone, CreditCard as CardIcon, StickyNote,
+  StickyNote, Camera,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -49,13 +45,6 @@ const DOCUMENT_TYPES = [
   { value: 'CEDULA', label: 'Cédula de identidad' },
   { value: 'LICENSE', label: 'Licencia de conducir' },
   { value: 'OTHER', label: 'Otro documento oficial' },
-]
-
-const KEY_OPTIONS: { type: KeyDeliveryType; label: string; icon: React.ReactNode }[] = [
-  { type: KeyDeliveryType.PHYSICAL, label: 'Física',  icon: <KeyRound className="h-4 w-4" /> },
-  { type: KeyDeliveryType.CARD,     label: 'Tarjeta', icon: <CardIcon className="h-4 w-4" /> },
-  { type: KeyDeliveryType.CODE,     label: 'Código',  icon: <Hash className="h-4 w-4" /> },
-  { type: KeyDeliveryType.MOBILE,   label: 'Móvil',   icon: <Smartphone className="h-4 w-4" /> },
 ]
 
 interface ConfirmCheckinDialogProps {
@@ -116,33 +105,23 @@ export function ConfirmCheckinDialog({
 }: ConfirmCheckinDialogProps) {
   const [step, setStep] = useState<Step>(1)
 
-  // Step 1 — datos + notas de llegada
+  // Step 1
   const [arrivalNotes, setArrivalNotes] = useState('')
 
-  // Step 2 — identidad
-  const [documentType, setDocumentType]     = useState(stay.documentType ?? '')
-  const [documentNumber, setDocumentNumber] = useState(stay.documentNumber ?? '')
-  const [documentVerified, setDocumentVerified] = useState(false)
+  // Step 2
+  const [documentType, setDocumentType] = useState(stay.documentType ?? '')
 
-  // Step 3 — pagos
+  // Step 3
   const [payments, setPayments] = useState<PaymentEntryInput[]>([emptyPayment()])
 
-  // Step 4 — tipo de acceso (PHYSICAL por defecto — 80% de casos LATAM)
-  const [keyType, setKeyType] = useState<KeyDeliveryType>(KeyDeliveryType.PHYSICAL)
-  const [keyTouched, setKeyTouched] = useState(false)
-
-  const balance      = stay.totalAmount - stay.amountPaid
+  const balance       = stay.totalAmount - stay.amountPaid
   const isAlreadyPaid = balance <= 0
 
   const resetAndClose = () => {
     setStep(1)
     setArrivalNotes('')
     setDocumentType(stay.documentType ?? '')
-    setDocumentNumber(stay.documentNumber ?? '')
-    setDocumentVerified(false)
     setPayments([emptyPayment()])
-    setKeyType(KeyDeliveryType.PHYSICAL)
-    setKeyTouched(false)
     onClose()
   }
 
@@ -184,9 +163,9 @@ export function ConfirmCheckinDialog({
 
   const canAdvance: Record<Step, boolean> = {
     1: true,
-    2: documentVerified,
+    2: true,
     3: step3Valid,
-    4: true, // keyType siempre tiene valor (default PHYSICAL)
+    4: true,
   }
 
   const advance = () => {
@@ -199,13 +178,11 @@ export function ConfirmCheckinDialog({
   }
 
   const handleConfirm = () => {
-    setKeyTouched(true)
     const data: ConfirmCheckinInput = {
-      documentVerified,
-      documentType:   documentType   || undefined,
-      documentNumber: documentNumber || undefined,
-      arrivalNotes:   arrivalNotes   || undefined,
-      keyType,
+      documentVerified: true,
+      documentType:   documentType || undefined,
+      arrivalNotes:   arrivalNotes || undefined,
+      keyType:        KeyDeliveryType.PHYSICAL,
       payments: isAlreadyPaid ? [] : payments,
     }
     onConfirm(data)
@@ -214,66 +191,68 @@ export function ConfirmCheckinDialog({
   // ── Step renders ─────────────────────────────────────────────────────────
 
   const renderStep1 = () => (
-    <div className="space-y-4">
-      {/* Datos de la reserva */}
+    <div className="space-y-3.5">
+      {/* Datos en grilla 3 columnas */}
       <div className="rounded-xl border border-slate-200 overflow-hidden">
-        <div className="grid grid-cols-2 divide-x divide-slate-200">
-          <DataField icon={<User className="h-3 w-3" />} label="Huésped" value={stay.guestName} />
+        <div className="grid grid-cols-3 divide-x divide-slate-200">
+          <DataField
+            icon={<User className="h-3 w-3" />}
+            label="Huésped"
+            value={stay.guestName}
+          />
           <DataField label="Habitación" value={roomLabel} />
+          <DataField label="Huéspedes" value={`${stay.paxCount}`} />
         </div>
-        <div className="border-t border-slate-200 grid grid-cols-2 divide-x divide-slate-200">
+        <div className="border-t border-slate-200 grid grid-cols-3 divide-x divide-slate-200">
           <DataField
             icon={<Calendar className="h-3 w-3" />}
             label="Check-in"
-            value={format(stay.checkIn, 'EEE d MMM yyyy', { locale: es })}
+            value={format(stay.checkIn, 'EEE d MMM', { locale: es })}
           />
           <DataField
             label="Check-out"
-            value={format(stay.checkOut, 'EEE d MMM yyyy', { locale: es })}
+            value={format(stay.checkOut, 'EEE d MMM', { locale: es })}
           />
-        </div>
-        <div className="border-t border-slate-200 grid grid-cols-2 divide-x divide-slate-200">
           <DataField
             icon={<Moon className="h-3 w-3" />}
             label="Noches"
             value={`${stay.nights}`}
           />
-          <DataField label="Huéspedes" value={`${stay.paxCount}`} />
         </div>
-        {stay.pmsReservationId && (
+        <div className="border-t border-slate-200 grid grid-cols-2 divide-x divide-slate-200">
+          <DataField label="Total" value={`${stay.currency} ${stay.totalAmount.toLocaleString()}`} />
+          <DataField
+            label="Saldo pendiente"
+            value={balance > 0 ? `${stay.currency} ${balance.toLocaleString()}` : 'Liquidado ✓'}
+            highlight={balance > 0}
+          />
+        </div>
+        {(stay.bookingRef ?? stay.pmsReservationId) && (
           <div className="border-t border-slate-200">
             <DataField
               icon={<Hash className="h-3 w-3" />}
-              label="ID reserva"
-              value={stay.pmsReservationId}
+              label="Referencia"
+              value={stay.bookingRef ?? stay.pmsReservationId!}
               mono
             />
           </div>
         )}
       </div>
 
-      <div className="rounded-xl border border-slate-200 overflow-hidden">
-        <div className="grid grid-cols-2 divide-x divide-slate-200">
-          <DataField label="Total" value={`${stay.currency} ${stay.totalAmount.toLocaleString()}`} />
-          <DataField
-            label="Saldo pendiente"
-            value={balance > 0 ? `${stay.currency} ${balance.toLocaleString()}` : 'Liquidado'}
-            highlight={balance > 0}
-          />
-        </div>
-      </div>
-
-      {/* Solicitudes especiales (read-only) */}
+      {/* Solicitudes especiales */}
       {stay.notes && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3">
-          <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1">
-            Solicitudes especiales
-          </p>
-          <p className="text-xs text-amber-800 leading-relaxed">{stay.notes}</p>
+        <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">
+              Solicitudes especiales
+            </p>
+            <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">{stay.notes}</p>
+          </div>
         </div>
       )}
 
-      {/* Notas de llegada — captura operativa */}
+      {/* Notas de llegada */}
       <div className="space-y-1.5">
         <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
           <StickyNote className="h-3 w-3" />
@@ -289,104 +268,66 @@ export function ConfirmCheckinDialog({
                      text-slate-800 placeholder:text-slate-400 resize-none
                      focus:outline-none focus:ring-2 focus:ring-emerald-300"
         />
-        <p className="text-[10px] text-slate-400">Visible en el historial de la estadía</p>
       </div>
 
-      {stay.guestEmail && (
-        <p className="text-xs text-slate-500">
-          <span className="font-medium text-slate-600">Email:</span> {stay.guestEmail}
-        </p>
-      )}
-      {stay.guestPhone && (
-        <p className="text-xs text-slate-500">
-          <span className="font-medium text-slate-600">Teléfono:</span> {stay.guestPhone}
-        </p>
+      {(stay.guestEmail || stay.guestPhone) && (
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
+          {stay.guestEmail && (
+            <span><span className="font-medium text-slate-600">Email:</span> {stay.guestEmail}</span>
+          )}
+          {stay.guestPhone && (
+            <span><span className="font-medium text-slate-600">Tel:</span> {stay.guestPhone}</span>
+          )}
+        </div>
       )}
     </div>
   )
 
   const renderStep2 = () => (
     <div className="space-y-4">
-      {/* Documento de identidad — tipo + número */}
-      <div className="rounded-xl border border-slate-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-            Tipo de documento
-          </p>
-          <select
-            value={documentType}
-            onChange={(e) => setDocumentType(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800
-                       focus:outline-none focus:ring-2 focus:ring-emerald-300"
-          >
-            {DOCUMENT_TYPES.map((dt) => (
-              <option key={dt.value} value={dt.value}>{dt.label}</option>
-            ))}
-          </select>
-        </div>
-        <div className="px-4 py-3">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-            Número de documento
-          </p>
-          <input
-            type="text"
-            value={documentNumber}
-            onChange={(e) => setDocumentNumber(e.target.value)}
-            placeholder="AB 123456"
-            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800
-                       focus:outline-none focus:ring-2 focus:ring-emerald-300"
-          />
-        </div>
+      <div className="space-y-1.5">
+        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+          Tipo de documento
+        </label>
+        <select
+          value={documentType}
+          onChange={(e) => setDocumentType(e.target.value)}
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800
+                     focus:outline-none focus:ring-2 focus:ring-emerald-300"
+        >
+          {DOCUMENT_TYPES.map((dt) => (
+            <option key={dt.value} value={dt.value}>{dt.label}</option>
+          ))}
+        </select>
       </div>
 
-      {/* Forcing function — verificación física */}
+      {/* Foto del documento — Enterprise */}
       <button
         type="button"
-        onClick={() => setDocumentVerified((v) => !v)}
-        className={cn(
-          'w-full flex items-center gap-4 rounded-xl border-2 p-5 transition-all text-left',
-          documentVerified
-            ? 'border-emerald-500 bg-emerald-50'
-            : 'border-slate-200 bg-white hover:border-slate-300',
-        )}
+        disabled
+        className="w-full rounded-xl border-2 border-dashed border-slate-200 bg-slate-50
+                   px-4 py-6 flex flex-col items-center gap-3 cursor-not-allowed"
       >
-        <div
-          className={cn(
-            'w-8 h-8 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors',
-            documentVerified ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300',
-          )}
-        >
-          {documentVerified && <Check className="h-4 w-4 text-white" />}
+        <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+          <Camera className="h-5 w-5 text-slate-400" />
         </div>
-        <div>
-          <div className={cn('font-semibold text-sm', documentVerified ? 'text-emerald-800' : 'text-slate-700')}>
-            Documento verificado físicamente
-          </div>
-          <div className="text-xs text-slate-500 mt-0.5">
-            Pasaporte · INE · Cédula · Licencia de conducir
-          </div>
+        <div className="text-center">
+          <p className="text-sm font-medium text-slate-500">Fotografiar documento</p>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Captura automática con verificación OCR
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 rounded-full bg-slate-200 px-3 py-1">
+          <ShieldCheck className="h-3 w-3 text-slate-500" />
+          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+            Plan Enterprise
+          </span>
         </div>
       </button>
 
-      {!documentVerified && (
-        <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-3">
-          <AlertTriangle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
-          <p className="text-xs text-amber-700 leading-relaxed">
-            Debe confirmar la revisión física del documento antes de continuar.
-            Requerido para el audit trail y protección ante disputas de chargeback.
-          </p>
-        </div>
-      )}
-
-      <div className="rounded-lg bg-slate-50 border border-slate-200 px-3.5 py-3">
-        <div className="flex items-center gap-2 text-slate-400">
-          <ShieldCheck className="h-3.5 w-3.5" />
-          <span className="text-[10px] font-semibold uppercase tracking-wider">Plan Enterprise</span>
-        </div>
-        <p className="text-xs text-slate-400 mt-1">
-          Escaneo biométrico y verificación OCR de documento — disponible próximamente
-        </p>
-      </div>
+      <p className="text-xs text-slate-400 text-center">
+        Puedes continuar seleccionando solo el tipo de documento.
+      </p>
     </div>
   )
 
@@ -409,10 +350,17 @@ export function ConfirmCheckinDialog({
 
     return (
       <div className="space-y-4">
-        <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5">
-          <span className="text-xs font-semibold text-amber-800">
-            Saldo pendiente: {stay.currency} {balance.toLocaleString()}
-          </span>
+        {/* Saldo pendiente — prominente */}
+        <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3.5 flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">
+              Saldo pendiente
+            </p>
+            <p className="text-2xl font-bold text-amber-800 mt-0.5 tabular-nums">
+              {stay.currency} {balance.toLocaleString()}
+            </p>
+          </div>
+          <CreditCard className="h-8 w-8 text-amber-300 shrink-0" />
         </div>
 
         {payments.map((p, idx) => (
@@ -430,36 +378,44 @@ export function ConfirmCheckinDialog({
               )}
             </div>
 
-            {/* Método */}
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Método</label>
-              <select
-                value={p.method}
-                onChange={(e) => updatePayment(idx, { method: e.target.value as PaymentMethod, reference: '', approvedById: '', approvalReason: '' })}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800
-                           focus:outline-none focus:ring-2 focus:ring-emerald-300"
-              >
-                {Object.entries(PAYMENT_METHOD_LABELS).map(([k, v]) => (
-                  <option key={k} value={k}>{v}</option>
-                ))}
-              </select>
-            </div>
+            {/* Método + Monto en dos columnas */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  Método
+                </label>
+                <select
+                  value={p.method}
+                  onChange={(e) => updatePayment(idx, {
+                    method: e.target.value as PaymentMethod,
+                    reference: '',
+                    approvedById: '',
+                    approvalReason: '',
+                  })}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-800
+                             focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                >
+                  {Object.entries(PAYMENT_METHOD_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+              </div>
 
-            {/* Monto */}
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                Monto ({stay.currency})
-              </label>
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                value={p.amount || ''}
-                onChange={(e) => updatePayment(idx, { amount: parseFloat(e.target.value) || 0 })}
-                placeholder="0.00"
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm
-                           text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-300"
-              />
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  Monto ({stay.currency})
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={p.amount || ''}
+                  onChange={(e) => updatePayment(idx, { amount: parseFloat(e.target.value) || 0 })}
+                  placeholder="0.00"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm
+                             text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                />
+              </div>
             </div>
 
             {/* Referencia (CARD_TERMINAL / BANK_TRANSFER) */}
@@ -472,34 +428,41 @@ export function ConfirmCheckinDialog({
                   type="text"
                   value={p.reference ?? ''}
                   onChange={(e) => updatePayment(idx, { reference: e.target.value })}
-                  placeholder={p.method === PaymentMethod.CARD_TERMINAL ? 'Código de aprobación (6-8 dígitos)' : 'Referencia de transferencia'}
+                  placeholder={
+                    p.method === PaymentMethod.CARD_TERMINAL
+                      ? 'Código de aprobación (6-8 dígitos)'
+                      : 'Referencia de transferencia'
+                  }
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm
                              text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-300"
                 />
               </div>
             )}
 
-            {/* Aprobación manager (COMP o monto $0) */}
+            {/* Autorización manager (COMP o monto $0) — campos planos, sin caja anidada */}
             {(p.method === PaymentMethod.COMP || p.amount === 0) && (
-              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 space-y-2">
-                <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">
-                  Requiere aprobación del manager
+              <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  Autorización del manager
+                  <span className="font-normal normal-case text-slate-400 ml-1.5">
+                    — cortesía y monto cero requieren aprobación para el registro de auditoría
+                  </span>
                 </p>
                 <input
                   type="text"
                   value={p.approvedById ?? ''}
                   onChange={(e) => updatePayment(idx, { approvedById: e.target.value })}
-                  placeholder="Código de autorización del manager"
-                  className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm
-                             text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  placeholder="Código del manager"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm
+                             text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-300"
                 />
                 <input
                   type="text"
                   value={p.approvalReason ?? ''}
                   onChange={(e) => updatePayment(idx, { approvalReason: e.target.value })}
-                  placeholder="Razón (ej: cortesía VIP, falla del servicio…)"
-                  className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm
-                             text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  placeholder="Motivo (cortesía VIP, compensación por servicio…)"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm
+                             text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-300"
                 />
               </div>
             )}
@@ -513,7 +476,6 @@ export function ConfirmCheckinDialog({
           </div>
         ))}
 
-        {/* Split payment */}
         <button
           type="button"
           onClick={addPayment}
@@ -523,7 +485,6 @@ export function ConfirmCheckinDialog({
           + Agregar otro método de pago
         </button>
 
-        {/* Running total */}
         {payments.length > 0 && (
           <div className={cn(
             'rounded-xl border px-3.5 py-2.5 flex items-center justify-between',
@@ -531,7 +492,7 @@ export function ConfirmCheckinDialog({
           )}>
             <span className="text-xs text-slate-600">Saldo tras este pago</span>
             <span className={cn(
-              'text-sm font-bold',
+              'text-sm font-bold tabular-nums',
               projectedBalance <= 0 ? 'text-emerald-700' : 'text-slate-800',
             )}>
               {stay.currency} {Math.max(0, projectedBalance).toLocaleString()}
@@ -544,67 +505,50 @@ export function ConfirmCheckinDialog({
 
   const renderStep4 = () => (
     <div className="space-y-4">
-      {/* Tipo de acceso — forcing function */}
-      <div>
-        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-          Tipo de acceso entregado
-        </p>
-        <div className="grid grid-cols-4 gap-2">
-          {KEY_OPTIONS.map((opt) => (
-            <button
-              key={opt.type}
-              type="button"
-              onClick={() => { setKeyType(opt.type); setKeyTouched(true) }}
-              className={cn(
-                'flex flex-col items-center gap-1.5 rounded-xl border-2 py-3 px-2 transition-all text-center',
-                keyType === opt.type
-                  ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                  : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300',
-              )}
-            >
-              {opt.icon}
-              <span className="text-[10px] font-semibold leading-tight">{opt.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Summary card */}
       <div className="rounded-xl border border-slate-200 overflow-hidden">
         <div className="grid grid-cols-2 divide-x divide-slate-200">
-          <div className="px-4 py-3 space-y-2">
+          <div className="px-4 py-3 space-y-1.5">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Huésped</p>
             <p className="text-sm font-semibold text-slate-800">{stay.guestName}</p>
-            <p className="text-xs text-slate-500">{stay.paxCount} persona{stay.paxCount !== 1 ? 's' : ''}</p>
+            <p className="text-xs text-slate-500">
+              {stay.paxCount} persona{stay.paxCount !== 1 ? 's' : ''}
+            </p>
           </div>
-          <div className="px-4 py-3 space-y-2">
+          <div className="px-4 py-3 space-y-1.5">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Estadía</p>
             <p className="text-sm font-semibold text-slate-800">{roomLabel}</p>
             <p className="text-xs text-slate-500">
-              {stay.nights} noche{stay.nights !== 1 ? 's' : ''} · {format(stay.checkIn, 'd MMM', { locale: es })} → {format(stay.checkOut, 'd MMM', { locale: es })}
+              {stay.nights} noche{stay.nights !== 1 ? 's' : ''} ·{' '}
+              {format(stay.checkIn, 'd MMM', { locale: es })} →{' '}
+              {format(stay.checkOut, 'd MMM', { locale: es })}
             </p>
           </div>
         </div>
         {!isAlreadyPaid && (
           <div className="border-t border-slate-200 px-4 py-3 bg-slate-50">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Pagos a registrar</p>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+              Pagos a registrar
+            </p>
             {payments.map((p, i) => (
               <div key={i} className="flex items-center justify-between text-xs text-slate-600">
                 <span>{PAYMENT_METHOD_LABELS[p.method]}</span>
-                <span className="font-mono font-medium">{stay.currency} {(p.amount || 0).toLocaleString()}</span>
+                <span className="font-mono font-medium tabular-nums">
+                  {stay.currency} {(p.amount || 0).toLocaleString()}
+                </span>
               </div>
             ))}
           </div>
         )}
         {arrivalNotes && (
           <div className="border-t border-slate-200 px-4 py-3 bg-slate-50">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Notas de llegada</p>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              Notas de llegada
+            </p>
             <p className="text-xs text-slate-600 line-clamp-2">{arrivalNotes}</p>
           </div>
         )}
       </div>
 
-      {/* What happens */}
       <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3.5 space-y-2">
         <p className="text-xs font-bold text-emerald-800">Al confirmar:</p>
         <ul className="space-y-1">
@@ -625,8 +569,7 @@ export function ConfirmCheckinDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-md p-0 overflow-hidden gap-0">
-        {/* Emerald top stripe */}
+      <DialogContent className="max-w-lg p-0 overflow-hidden gap-0">
         <div className="h-1.5 w-full bg-emerald-500" />
 
         <DialogHeader className="px-6 pt-4 pb-0">
@@ -646,22 +589,19 @@ export function ConfirmCheckinDialog({
           <StepIndicator current={step} />
         </DialogHeader>
 
-        {/* Step label */}
         <div className="px-6 pb-2">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
             Paso {step} — {STEPS.find((s) => s.num === step)?.label}
           </p>
         </div>
 
-        {/* Step content */}
-        <div className="px-6 pb-4 max-h-[420px] overflow-y-auto">
+        <div className="px-6 pb-4 max-h-[480px] overflow-y-auto">
           {step === 1 && renderStep1()}
           {step === 2 && renderStep2()}
           {step === 3 && renderStep3()}
           {step === 4 && renderStep4()}
         </div>
 
-        {/* Footer */}
         <div className="flex gap-2 px-6 pb-5 border-t border-slate-100 pt-4">
           {step > 1 ? (
             <Button
@@ -737,7 +677,7 @@ function DataField({
   mono?: boolean
 }) {
   return (
-    <div className={cn('px-4 py-3', highlight && 'bg-amber-50')}>
+    <div className={cn('px-3 py-3', highlight && 'bg-amber-50')}>
       <div className="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
         {icon && <span className="text-slate-300">{icon}</span>}
         {label}

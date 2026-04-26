@@ -37,8 +37,8 @@ export function useTooltip(options?: { forceAbove?: boolean }) {
     const placement: 'top' | 'bottom' =
       forceAbove || rect.top >= TOOLTIP_MIN_TOP ? 'top' : 'bottom'
 
-    // Clamp horizontally so the tooltip (256px wide + padding) stays in view.
-    const TOOLTIP_HALF = 144
+    // Clamp horizontally so the tooltip (320px wide) stays in view.
+    const TOOLTIP_HALF = 162
     const clampedX = Math.max(TOOLTIP_HALF, Math.min(mouseX, window.innerWidth - TOOLTIP_HALF))
 
     // top → tooltip bottom aligns with block top − 8px gap (translateY(-100%) in portal)

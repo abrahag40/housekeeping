@@ -138,11 +138,12 @@ export class NightAuditScheduler {
 
       const overdueStays = await this.prisma.guestStay.findMany({
         where: {
-          organizationId: orgId ?? undefined,
-          propertyId: settings.propertyId,
-          deletedAt:      null,
-          actualCheckout: null,
-          noShowAt:       null,
+          organizationId:    orgId ?? undefined,
+          propertyId:        settings.propertyId,
+          deletedAt:         null,
+          actualCheckout:    null,
+          noShowAt:          null,
+          noShowRevertedAt:  null, // exclude stays that were manually reverted — don't re-mark
           checkinAt: { gte: dayStart, lte: dayEnd },
         },
         select: {

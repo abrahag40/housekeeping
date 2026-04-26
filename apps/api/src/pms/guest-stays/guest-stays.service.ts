@@ -22,6 +22,26 @@ import { StayJourneyService } from '../stay-journeys/stay-journeys.service'
 import { ChannexGateway } from '../../integrations/channex/channex.gateway'
 import { NotificationCenterService } from '../../notification-center/notification-center.service'
 
+/** Maps GuestStay.source values to the single-char SRC segment of bookingRef. */
+const SOURCE_CHAR: Record<string, string> = {
+  booking:     'B',
+  'booking.com': 'B',
+  airbnb:      'A',
+  hostelworld: 'H',
+  expedia:     'E',
+  vrbo:        'V',
+  homeaway:    'V',
+  tripadvisor: 'T',
+  google:      'G',
+  agoda:       'W',
+  despegar:    'K',
+  decolar:     'K',
+  hotelbeds:   'R',
+  sembo:       'S',
+  channex:     'C',
+  direct:      'D',
+}
+
 /** Returns the local date string (YYYY-MM-DD) for a given UTC date in the specified IANA timezone. */
 function toLocalDate(date: Date, timezone: string): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -57,12 +77,32 @@ export class GuestStaysService {
     private readonly notifCenter: NotificationCenterService,
   ) {}
 
+  /** Generates a globally unique human-readable booking reference.
+   *  Format: [CC]-[SRC]-[PROP]-[YYMM]-[SEQ]
+   *  Example: MX-B-001-2604-0134
+   */
+  private async generateBookingRef(
+    propCode: string,
+    country: string | null | undefined,
+    source: string | null | undefined,
+    checkIn: Date,
+    tx: Prisma.TransactionClient,
+  ): Promise<string> {
+    const cc   = ((country ?? 'ZZ').toUpperCase() + 'ZZ').slice(0, 2)
+    const src  = SOURCE_CHAR[(source ?? '').toLowerCase()] ?? 'Z'
+    const yy   = String(checkIn.getFullYear()).slice(-2)
+    const mm   = String(checkIn.getMonth() + 1).padStart(2, '0')
+    const prefix = `${cc}-${src}-${propCode}-${yy}${mm}-`
+    const count = await tx.guestStay.count({ where: { bookingRef: { startsWith: prefix } } })
+    return `${prefix}${String(count + 1).padStart(4, '0')}`
+  }
+
   async create(dto: CreateGuestStayDto, actorId: string) {
     const orgId = this.tenant.getOrganizationId()
 
     const room = await this.prisma.room.findUnique({
       where: { id: dto.roomId, organizationId: orgId },
-      include: { property: true },
+      include: { property: { include: { settings: { select: { timezone: true } } } } },
     })
     if (!room) throw new NotFoundException('Habitación no encontrada')
 
@@ -107,19 +147,24 @@ export class GuestStaysService {
     )
     const total = dto.ratePerNight * nights
 
-    const count = await this.prisma.guestStay.count({
-      where: { organizationId: orgId },
-    })
-    const pmsId = `PMS-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`
-
     const guestName = `${dto.firstName} ${dto.lastName}`
 
     const stay = await this.prisma.$transaction(async (tx) => {
+      const propCode = room.property.propCode ?? '000'
+      const bookingRef = await this.generateBookingRef(
+        propCode,
+        room.property.city ?? room.property.name,
+        dto.source,
+        checkIn,
+        tx,
+      )
+
       const newStay = await tx.guestStay.create({
         data: {
           organizationId: orgId,
           propertyId: dto.propertyId,
           roomId: dto.roomId,
+          bookingRef,
           guestName,
           guestEmail: dto.guestEmail,
           guestPhone: dto.guestPhone,
@@ -203,14 +248,14 @@ export class GuestStaysService {
           nights,
           totalAmount: total,
           currency: dto.currency,
-          pmsId,
+          pmsId: stay.bookingRef ?? stay.id,
         })
         .catch((err) => {
           this.logger.error(`Failed to send checkin email: ${err}`)
         })
     }
 
-    return { ...stay, pmsReservationId: pmsId }
+    return stay
   }
 
   /**
@@ -616,6 +661,7 @@ export class GuestStaysService {
         organizationId: orgId,
         deletedAt: null,
         actualCheckout: null,           // exclude already checked-out stays
+        noShowAt: null,                 // exclude no-shows — they release inventory (§17)
         id: { not: stayId },            // exclude the stay being moved
         checkinAt:   { lt: stay.scheduledCheckout },
         scheduledCheckout: { gt: stay.checkinAt },
@@ -762,23 +808,13 @@ export class GuestStaysService {
     if (!stay) throw new NotFoundException('Estadía no encontrada')
     if (stay.actualCheckout) throw new ConflictException('El huésped ya realizó checkout')
     if (stay.noShowAt)        throw new ConflictException('La estadía ya está marcada como no-show')
+    if (stay.actualCheckin)   throw new ConflictException('El huésped ya realizó check-in — no se puede marcar como no-show')
 
     const tz = stay.room.property.settings?.timezone ?? 'UTC'
     const todayLocal    = toLocalDate(new Date(), tz)
     const checkinLocal  = toLocalDate(stay.checkinAt, tz)
     if (checkinLocal > todayLocal) {
       throw new ConflictException('No se puede marcar no-show antes de la fecha de llegada')
-    }
-
-    // Guard: no se puede marcar no-show antes de la hora de alerta del día de llegada.
-    // El recepcionista debe esperar hasta potentialNoShowWarningHour (default 20:00 hora local)
-    // para que haya suficiente evidencia de que el huésped no llegará.
-    const warningHour = stay.room.property.settings?.potentialNoShowWarningHour ?? 20
-    const currentLocalHour = toLocalHour(new Date(), tz)
-    if (checkinLocal === todayLocal && currentLocalHour < warningHour) {
-      throw new ConflictException(
-        `No se puede marcar no-show antes de las ${warningHour}:00 hora local`,
-      )
     }
 
     const feeAmount    = opts?.waiveCharge ? new Prisma.Decimal(0) : stay.ratePerNight
@@ -910,6 +946,27 @@ export class GuestStaysService {
     const hoursSince = (Date.now() - stay.noShowAt.getTime()) / 3_600_000
     if (hoursSince > 48) {
       throw new ForbiddenException('La ventana de reversión de 48 horas ha expirado')
+    }
+
+    // Guard: si el cuarto fue reasignado después del no-show, revertir crearía overbooking.
+    // El recepcionista debe primero mover al nuevo huésped a otra habitación.
+    const bloqueante = await this.prisma.guestStay.findFirst({
+      where: {
+        id:                { not: stayId },
+        roomId:            stay.roomId,
+        organizationId:    orgId,
+        noShowAt:          null,
+        actualCheckout:    null,
+        checkinAt:         { lt: stay.scheduledCheckout },
+        scheduledCheckout: { gt: stay.checkinAt },
+      },
+      select: { guestName: true },
+    })
+    if (bloqueante) {
+      throw new ConflictException(
+        `No se puede revertir: la habitación fue reasignada a ${bloqueante.guestName}. ` +
+        `Mueve a ${stay.guestName} a otra habitación antes de revertir el no-show.`,
+      )
     }
 
     const now = new Date()

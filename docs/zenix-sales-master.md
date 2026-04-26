@@ -3,7 +3,7 @@
 > **Para uso interno del equipo comercial.**
 > Este documento es el mapa completo de funcionalidades de Zenix PMS. Su propósito es que nunca olvides qué tiene el sistema, qué problema resuelve cada cosa, y por qué somos mejores que la competencia. No es técnico — es la fuente de tu speech.
 >
-> Última actualización: 2026-04-25 — Sprint 8F completado (Ventana temporal de no-show con día hotelero real)
+> Última actualización: 2026-04-26 — Sprint 8G: NS stripe rediseñada (badge identificable + rayas sutiles); guard de audit que impide re-marcado automático de no-shows revertidos; booking ref visible en tooltip
 
 ---
 
@@ -62,6 +62,9 @@ Zenix conecta estas dos realidades en un solo sistema con el calendario como fue
 | Cumplimiento fiscal CFDI 4.0 / DIAN / SUNAT | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Ventana temporal de no-show (día hotelero real, no medianoche) | ❌ | ❌ | ❌ | ❌ | ✅ configurable por propiedad |
 | Reversión de no-show desde tooltip del calendario (< 48h) | ❌ | ❌ | ❌ | ❌ | ✅ botón ámbar en 1 click |
+| Audit trail visual NS + reserva activa sin sobreposición | ⚠️ ghost sin nombre | ❌ NS oculto | ❌ NS oculto | ❌ NS cubierto | ✅ franja NS con badge + nombre; toggle ocultar/mostrar |
+| Guard anti-re-marcado: no-show revertido queda protegido del audit automático | ❌ | ❌ | ❌ | ❌ | ✅ `noShowRevertedAt: null` en NightAudit |
+| Guard anti-overbooking en reversión de no-show con cuarto reasignado | ❌ | ❌ | ❌ | ❌ | ✅ 409 + mensaje accionable |
 | Reversión de no-show auditada con razón y actor | ❌ | ⚠️ sin razón | ❌ | ⚠️ sin actor | ✅ |
 | Cargo perdonado con razón auditada | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Confirmación física de llegada del huésped (anti ghost check-in) | ❌ | ❌ | ❌ | ❌ | ✅ wizard 4 pasos |
@@ -301,6 +304,28 @@ Mews tiene reversión pero sin razón obligatoria ni cumplimiento fiscal LATAM. 
 
 Toda reserva que intenta confirmarse — venga del recepcionista, de Booking.com, de Hostelworld, o de cualquier OTA vía webhook — pasa por una verificación de disponibilidad antes de guardarse. Si hay conflicto, la segunda reserva se rechaza con un mensaje que explica qué huésped ya ocupa esa habitación y hasta cuándo. No hay overbooking silencioso. El recepcionista siempre sabe qué pasó.
 
+**Capa 1b — Audit trail visual de no-show sin pérdida de inventario (exclusivo Zenix)**
+
+Cuando se marca un no-show y el cuarto es reasignado a un nuevo huésped para las mismas fechas, el calendario enfrenta un dilema que ningún otro PMS resuelve bien:
+
+- Opera Cloud: el bloque NS permanece debajo con opacidad reducida — confunde al recepcionista sobre cuál es la reserva activa
+- Cloudbeds / Little Hotelier: el bloque NS desaparece del calendario — se pierde el audit trail visual y la evidencia de chargeback
+- Clock PMS+: z-index puro — el bloque activo cubre completamente al NS sin ningún indicador
+
+**Zenix resuelve el dilema con una solución de dos capas:**
+
+1. **Franja NS superior (8px):** el bloque del no-show se colapsa en una franja roja con rayas diagonales en la parte superior de la celda. La franja muestra `NS · [Nombre]` cuando el ancho lo permite — el recepcionista puede identificar visualmente al huésped del no-show sin abrir ningún panel.
+
+2. **Bloque activo completo debajo:** la reserva activa ocupa el 85% restante de la celda con visibilidad completa. Sin ambigüedad operativa — el recepcionista sabe exactamente quién está en el cuarto.
+
+El click en la franja abre directamente el panel del no-show para auditoría. El click en el bloque activo muestra el huésped actual. Dos elementos, dos funciones, cero confusión.
+
+**Guard anti-overbooking en reversión:** si se intenta revertir el no-show dentro de la ventana de 48h pero el cuarto ya está reasignado, el sistema rechaza la operación con un mensaje específico: quién ocupa el cuarto y qué debe hacer el recepcionista primero. El botón "Revertir" en el tooltip aparece deshabilitado con explicación visible. Si alguien intenta la reversión directamente vía API, el backend retorna `409 ConflictException` con el nombre del huésped que bloquea la operación.
+
+**Fundamento competitivo:** Opera Cloud muestra el "ghost" semitransparente pero sin nombre — el recepcionista no sabe de quién se trata. Cloudbeds elimina el bloque — pierde la evidencia de chargeback que Visa/Mastercard requieren (Core Rules §5.9.2). Clock PMS+ oculta completamente el NS — el auditor fiscal no tiene visibilidad. Zenix es el único sistema que mantiene la evidencia visible, identificable, y funcionalmente separada del bloque activo.
+
+---
+
 **Capa 2 — Sincronización con Channel Manager Channex.io (próximamente)**
 
 Cuando se confirma una reserva en Zenix, el sistema notifica a Channex.io en tiempo real. Channex actualiza la disponibilidad en todas las OTAs conectadas en segundos. La habitación desaparece de Booking.com y Hostelworld antes de que otro huésped pueda confirmar. Es el mismo estándar que Opera Cloud y Mews.
@@ -471,6 +496,8 @@ El resultado: cero incidencias de mantenimiento que caen en el olvido. Un regist
 | Operar hoteles en múltiples países | Night audit multi-timezone por propiedad (hora local real) |
 | Cumplimiento fiscal en LATAM | Registros inmutables + CFDI-ready + moneda ISO |
 | Cero overbooking con OTAs | Hard block transaccional + Channex.io (mismo estándar Opera/Mews) |
+| Ver en el calendario quién fue el no-show cuando hay nueva reserva | Franja NS identificable con nombre sin ocultar ni sobrelapear la reserva activa |
+| Revertir un no-show sin crear overbooking por error | Guard backend que rechaza la reversión si el cuarto ya fue reasignado, con mensaje accionable |
 | Trazabilidad ante disputas | Audit trail con actor, timestamp y razón en cada operación |
 | Un sistema que los housekeepers realmente usen | App diseñada para uso con una mano, en movimiento, sin capacitación |
 | Confirmar que el huésped realmente llegó | Badge "Sin confirmar" en calendario + wizard de check-in de 4 pasos |

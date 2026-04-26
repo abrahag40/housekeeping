@@ -274,6 +274,9 @@ model Property {
   // same region (Slack/Google-picker pattern).
   region         String?
   city           String?
+  // Globally unique 3-digit code assigned sequentially at property creation.
+  // Used as segment in bookingRef: MX-D-001-2604-0134
+  propCode       String?       @unique @map("prop_code")
   isActive       Boolean       @default(true) @map("is_active")
   deletedAt      DateTime?     @map("deleted_at")
   createdAt      DateTime      @default(now())
@@ -638,6 +641,9 @@ model RoomType {
 
 model GuestStay {
   id                String        @id @default(uuid())
+  // Human-readable booking reference: MX-D-001-2604-0134
+  // Segments: [country]-[source]-[propCode]-[YYMM]-[seq]
+  bookingRef        String?       @unique @map("booking_ref")
   organizationId    String        @map("organization_id")
   propertyId        String        @map("property_id")
   roomId            String        @map("room_id")

@@ -56,9 +56,9 @@ export type SourceKey = keyof typeof SOURCE_COLORS
 // ─── Stay status colors (operational) ────────────────────────
 export const STAY_STATUS_COLORS = {
   UNCONFIRMED: {
-    bg:     'rgba(245,158,11,0.08)',
-    border: 'rgba(245,158,11,0.35)',
-    text:   '#92400E',
+    bg:     '#DBEAFE',
+    border: '#93C5FD',
+    text:   '#1E40AF',
     label:  'Sin confirmar',
   },
   ARRIVING: {

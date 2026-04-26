@@ -196,6 +196,7 @@ export interface SseEvent<T = unknown> {
 
 export interface GuestStayDto {
   id: string
+  bookingRef: string | null
   propertyId: string
   roomId: string
   guestName: string

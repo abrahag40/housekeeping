@@ -23,6 +23,7 @@ interface BookingBlockProps {
   onNoShow?: (stayId: string) => void
   onStartCheckin?: (stayId: string) => void
   onRevertNoShow?: (stayId: string) => void
+  onOpenDetail?: (stayId: string) => void
   isDragging?: boolean
   isLocked?: boolean
   onToggleLock?: (stayId: string) => void
@@ -31,6 +32,10 @@ interface BookingBlockProps {
   isInActiveJourney?: boolean
   potentialNoShowWarningHour?: number
   noShowCutoffHour?: number
+  /** NS block that collides with an active booking — render as thin stripe */
+  isNsStripe?: boolean
+  /** Active block that has a NS stripe above it — shift down to avoid overlap */
+  hasNsAbove?: boolean
 }
 
 const BLOCK_SHADOW = [
@@ -98,6 +103,7 @@ function BookingBlockInner({
   onNoShow,
   onStartCheckin,
   onRevertNoShow,
+  onOpenDetail,
   isDragging = false,
   isLocked = false,
   onToggleLock,
@@ -106,6 +112,8 @@ function BookingBlockInner({
   isInActiveJourney = false,
   potentialNoShowWarningHour,
   noShowCutoffHour,
+  isNsStripe = false,
+  hasNsAbove = false,
 }: BookingBlockProps) {
   const forceAbove = stay.hasMultipleSegments === true && stay.isLastSegment !== true
   const { triggerRef, registerTooltipRef, visible, position, hide } = useTooltip({ forceAbove })
@@ -222,6 +230,60 @@ function BookingBlockInner({
 
   if (rect.width < 4) return null
 
+  // NS stripe: render only the diagonal stripes + optional "NS" label.
+  // No tooltip, no drag — click opens the detail panel directly.
+  if (isNsStripe) {
+    const nsStayId = stay.guestStayId ?? stay.id
+    const firstName = stay.guestName.split(' ')[0]
+    return (
+      <div
+        title={`No-show: ${stay.guestName}`}
+        data-stay-id={stay.id}
+        onClick={() => { if (onOpenDetail) { onOpenDetail(nsStayId) } else { onClick() } }}
+        className="absolute select-none overflow-hidden"
+        style={{
+          left:   rect.x + 1,
+          top:    rect.y + groupHeaderOffsetY + 1,
+          width:  rect.width - 3,
+          height: 14,
+          background: `repeating-linear-gradient(-45deg, rgba(239,68,68,0.28) 0px, rgba(239,68,68,0.28) 2px, rgba(253,232,232,0.60) 2px, rgba(253,232,232,0.60) 10px)`,
+          borderRadius: 4,
+          zIndex: 2,
+          pointerEvents: 'auto',
+          cursor: 'pointer',
+        }}
+      >
+        {rect.width > 40 && (
+          <div className="absolute inset-0 flex items-center gap-1 px-1.5">
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                lineHeight: 1,
+                color: '#ffffff',
+                backgroundColor: '#DC2626',
+                borderRadius: 3,
+                padding: '1px 4px',
+                flexShrink: 0,
+                letterSpacing: '0.03em',
+              }}
+            >
+              NS
+            </span>
+            {rect.width > 72 && (
+              <span
+                className="truncate"
+                style={{ fontSize: 10, fontWeight: 500, color: '#7F1D1D', lineHeight: 1 }}
+              >
+                {firstName}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   function handleMouseDown(e: React.MouseEvent) {
     if (isLocked) return
     if (e.button !== 0 || e.ctrlKey || e.metaKey) return
@@ -310,9 +372,17 @@ function BookingBlockInner({
         )}
         style={{
           left: rect.x + 1,
-          top: rect.y + groupHeaderOffsetY + 3,
+          top: isNsStripe
+            ? rect.y + groupHeaderOffsetY + 1
+            : hasNsAbove
+            ? rect.y + groupHeaderOffsetY + 16
+            : rect.y + groupHeaderOffsetY + 3,
           width: rect.width - 3,
-          height: rect.height - 4,
+          height: isNsStripe
+            ? 14
+            : hasNsAbove
+            ? rect.height - 16
+            : rect.height - 4,
           background: isConfirmedNoShow
             ? `repeating-linear-gradient(-45deg, rgba(239,68,68,0.13) 0px, rgba(239,68,68,0.13) 2px, transparent 2px, transparent 8px), ${colors.bg}`
             : colors.bg,
@@ -326,7 +396,9 @@ function BookingBlockInner({
             : BLOCK_SHADOW,
           borderRadius: 6,
           pointerEvents: isDragging ? 'none' : 'auto',
-          opacity: dimmed
+          opacity: isNsStripe
+            ? 0.90
+            : dimmed
             ? 0.15
             : isDragging
             ? 0.3
@@ -343,7 +415,10 @@ function BookingBlockInner({
           borderRight: lastSegmentBorder,
           animationFillMode: 'forwards',
           animationDelay: `${staggerIndex * 20}ms`,
-          zIndex: dimmed ? 3 : visible ? 20 : 6,
+          zIndex: isNsStripe ? 2 : dimmed ? 3 : visible ? 20 : 6,
+          transition: isDragging
+            ? 'none'
+            : 'top 220ms cubic-bezier(0.22,1,0.36,1), height 220ms cubic-bezier(0.22,1,0.36,1)',
         }}
       >
         {/* OTA accent bar — left border stripe. Wider + brighter red for confirmed no-shows. */}
@@ -542,6 +617,7 @@ function BookingBlockInner({
         onStartCheckin={onStartCheckin ? (stayId) => { hide(); onStartCheckin(stayId) } : undefined}
         onRevertNoShow={onRevertNoShow ? (stayId) => { hide(); onRevertNoShow(stayId) } : undefined}
         isPotentialNoShow={isPotentialNoShow}
+        roomIsRebooked={hasNsAbove}
       />
     </>
   )
@@ -567,5 +643,7 @@ export const BookingBlock = memo(BookingBlockInner, (prev, next) =>
   prev.staggerIndex === next.staggerIndex &&
   prev.isInActiveJourney === next.isInActiveJourney &&
   prev.potentialNoShowWarningHour === next.potentialNoShowWarningHour &&
-  prev.noShowCutoffHour === next.noShowCutoffHour,
+  prev.noShowCutoffHour === next.noShowCutoffHour &&
+  prev.isNsStripe === next.isNsStripe &&
+  prev.hasNsAbove === next.hasNsAbove,
 )

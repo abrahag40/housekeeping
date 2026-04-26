@@ -11,9 +11,13 @@ export class PropertiesService {
     private tenant: TenantContextService,
   ) {}
 
-  create(dto: CreatePropertyDto) {
+  async create(dto: CreatePropertyDto) {
     const orgId = this.tenant.getOrganizationId()
-    return this.prisma.property.create({ data: { ...dto, organizationId: orgId } })
+    return this.prisma.$transaction(async (tx) => {
+      const count = await tx.property.count()
+      const propCode = String(count + 1).padStart(3, '0')
+      return tx.property.create({ data: { ...dto, organizationId: orgId, propCode } })
+    })
   }
 
   findAll() {

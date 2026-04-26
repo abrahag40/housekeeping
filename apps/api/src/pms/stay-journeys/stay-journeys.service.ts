@@ -60,7 +60,9 @@ export class StayJourneyService {
     return this.prisma.stayJourney.findMany({
       where: {
         propertyId,
-        status: 'ACTIVE',
+        // Include NO_SHOW journeys so their segments appear in the calendar as
+        // NS stripe blocks. The frontend filters them when hideNoShows=true.
+        status: { in: ['ACTIVE', 'NO_SHOW'] },
         journeyCheckIn: { lt: to },
         journeyCheckOut: { gt: from },
       },

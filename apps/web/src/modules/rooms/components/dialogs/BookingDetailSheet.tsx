@@ -106,8 +106,11 @@ export function BookingDetailSheet({
   // ARRIVING (future check-in) is excluded: you cannot no-show someone before their arrival day.
   const isArrivalDay = startOfDay(new Date(stay.checkIn)).getTime() === startOfDay(new Date()).getTime()
   const isUnconfirmed    = status === 'UNCONFIRMED'
-  const canNoShow       = !isNoShow && (status === 'IN_HOUSE' || isUnconfirmed) && isArrivalDay
-  const canEarlyCheckout = !isNoShow && status === 'IN_HOUSE' && !isArrivalDay
+  const canNoShow          = !isNoShow && isArrivalDay && !stay.actualCheckin
+  const canConfirmCheckin  = !stay.actualCheckin && !isNoShow && isArrivalDay
+  // Allow early checkout if IN_HOUSE and either it's not arrival day, OR the guest
+  // already confirmed check-in (actualCheckin set) — covers arrival-day check-ins.
+  const canEarlyCheckout   = !isNoShow && status === 'IN_HOUSE' && (!isArrivalDay || !!stay.actualCheckin)
 
   const isRoomMove = stay.segmentReason === 'ROOM_MOVE'
   const isSplit    = stay.segmentReason === 'SPLIT'
@@ -464,11 +467,11 @@ export function BookingDetailSheet({
                   <div className="bg-slate-50 rounded-lg overflow-hidden divide-y divide-slate-100">
                     <div className="flex items-center justify-between px-3 py-2.5">
                       <span className="text-xs text-slate-400 font-mono uppercase tracking-wide">
-                        PMS ID
+                        {stay.bookingRef ? 'Referencia' : 'PMS ID'}
                       </span>
 
                       <span className="text-xs font-mono font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200 select-all cursor-text">
-                        {stay.pmsReservationId ?? '—'}
+                        {stay.bookingRef ?? stay.pmsReservationId ?? '—'}
                       </span>
                     </div>
 
@@ -767,7 +770,7 @@ export function BookingDetailSheet({
                       )}
                       {stay.guestEmail && (
                         <a
-                          href={`mailto:${stay.guestEmail}?subject=${encodeURIComponent(`Reserva ${stay.pmsReservationId ?? stay.id}`)}`}
+                          href={`mailto:${stay.guestEmail}?subject=${encodeURIComponent(`Reserva ${stay.bookingRef ?? stay.pmsReservationId ?? stay.id}`)}`}
                           onClick={() =>
                             logContact.mutate({
                               channel: 'EMAIL',
@@ -903,7 +906,7 @@ export function BookingDetailSheet({
             )}
 
             {/* UNCONFIRMED: guest arrived today but check-in not confirmed yet */}
-            {isUnconfirmed && onStartCheckin && (
+            {canConfirmCheckin && onStartCheckin && (
               <Button
                 size="sm"
                 className="flex-1 text-xs text-white bg-emerald-600 hover:bg-emerald-700"
