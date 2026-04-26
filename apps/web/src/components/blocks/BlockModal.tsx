@@ -16,7 +16,7 @@
  * - Descripciones de card: text-gray-500 (no text-gray-400)
  */
 import { useState, useEffect, useRef } from 'react'
-import { Lock, ChevronDown } from 'lucide-react'
+import { Lock } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import {
   BlockSemantic,
@@ -123,7 +123,6 @@ export function BlockModal({
   const [semantic, setSemantic]             = useState<BlockSemantic>(BlockSemantic.OUT_OF_SERVICE)
   const [reason, setReason]                 = useState<BlockReason>(BlockReason.MAINTENANCE)
   const [notes, setNotes]                   = useState('')
-  const [showNotes, setShowNotes]           = useState(false)
   const [startDate, setStartDate]           = useState(isoToday())
   const [endDate, setEndDate]               = useState('')
   const [isSubmitting, setIsSubmitting]     = useState(false)
@@ -155,11 +154,6 @@ export function BlockModal({
     }
   }
 
-  // Auto-expand notas cuando el motivo es "Otro"
-  useEffect(() => {
-    if (reason === BlockReason.OTHER) setShowNotes(true)
-  }, [reason])
-
   // Reset al abrir
   useEffect(() => {
     if (!isOpen) return
@@ -170,7 +164,6 @@ export function BlockModal({
     setSemantic(BlockSemantic.OUT_OF_SERVICE)
     setReason(BlockReason.MAINTENANCE)
     setNotes('')
-    setShowNotes(false)
     setStartDate(start)
     setEndDate(prefillEndDate ?? addDaysToIso(start, 1))
     setError('')
@@ -526,41 +519,22 @@ export function BlockModal({
                 </div>
               </div>
 
-              {/* Instrucciones — colapsables */}
+              {/* Instrucciones */}
               <div>
-                <button
-                  type="button"
-                  onClick={() => setShowNotes((v) => !v)}
-                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-                >
-                  <ChevronDown
-                    className={[
-                      'w-3.5 h-3.5 transition-transform duration-150',
-                      showNotes ? '' : '-rotate-90',
-                    ].join(' ')}
-                  />
-                  Agregar instrucciones
-                  <span className="text-gray-400 text-xs font-normal">(opcional)</span>
-                  {reason === BlockReason.OTHER && (
-                    <span className="text-red-500 text-xs">*</span>
-                  )}
-                </button>
-
-                {showNotes && (
-                  <div className="mt-3">
-                    <textarea
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      rows={2}
-                      placeholder={
-                        reason === BlockReason.OTHER
-                          ? 'Obligatorio cuando el motivo es Otro'
-                          : 'Instrucciones visibles para todo el equipo'
-                      }
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                    />
-                  </div>
-                )}
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Instrucciones
+                </label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={3}
+                  placeholder={
+                    reason === BlockReason.OTHER
+                      ? 'Obligatorio cuando el motivo es Otro — visible para todo el equipo'
+                      : 'Visible para todo el equipo (Opcional)'
+                  }
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                />
               </div>
             </div>
           </div>
