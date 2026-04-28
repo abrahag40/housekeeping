@@ -16,7 +16,7 @@
  * - Descripciones de card: text-gray-500 (no text-gray-400)
  */
 import { useState, useEffect, useRef } from 'react'
-import { Lock } from 'lucide-react'
+import { Lock, AlertTriangle } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import {
   BlockSemantic,
@@ -77,6 +77,20 @@ const SEMANTIC_DESCRIPTIONS: Record<BlockSemantic, string> = {
   [BlockSemantic.OUT_OF_ORDER]:     'Inhabilitada. Sale del inventario. Requiere aprobación.',
   [BlockSemantic.OUT_OF_INVENTORY]: 'Largo plazo (renovación). Fuera del inventario operativo.',
   [BlockSemantic.HOUSE_USE]:        'Uso interno: fotografía, capacitación, personal.',
+}
+
+// ─── Tipo de respuesta del check de disponibilidad ────────────────────────────
+
+interface AvailabilityConflict {
+  source: 'LOCAL_STAY' | 'LOCAL_SEGMENT'
+  label: string
+  from: string
+  to: string
+}
+
+interface AvailabilityCheckResult {
+  available: boolean
+  conflicts: AvailabilityConflict[]
 }
 
 // ─── Helpers de fecha ─────────────────────────────────────────────────────────
@@ -142,6 +156,26 @@ export function BlockModal({
 
   const selectedRoom              = rooms.find((r) => r.id === roomId)
   const unitsForRoom: UnitDto[]   = (selectedRoom as any)?.units ?? []
+
+  // ── Pre-flight: verificar disponibilidad cuando hay habitación + fechas ────
+  // Se dispara cada vez que cambia roomId, startDate o endDate.
+  // Usamos el roomId directo (scope=room) o el roomId de la unidad seleccionada.
+  const effectiveRoomId = scope === 'room' ? roomId : selectedRoom?.id ?? ''
+  const availEnabled = isOpen && !!effectiveRoomId && !!startDate
+
+  const { data: availData, isFetching: availLoading } = useQuery<AvailabilityCheckResult>({
+    queryKey: ['block-availability', effectiveRoomId, startDate, endDate],
+    queryFn: () => {
+      const params = new URLSearchParams({ roomId: effectiveRoomId, startDate })
+      if (endDate) params.set('endDate', endDate)
+      return api.get<AvailabilityCheckResult>(`/blocks/check-availability?${params}`)
+    },
+    enabled: availEnabled,
+    staleTime: 0,
+    retry: false,
+  })
+
+  const hasConflict = availData !== undefined && !availData.available
 
   // ── reason ↔ semantic — sin useEffect circular ────────────────────────────
 
@@ -507,6 +541,28 @@ export function BlockModal({
                     )
                   })}
                 </div>
+
+                {/* Conflicto de disponibilidad */}
+                {availLoading && effectiveRoomId && (
+                  <p className="text-[11px] text-gray-400 animate-pulse">
+                    Verificando disponibilidad…
+                  </p>
+                )}
+                {!availLoading && hasConflict && availData && (
+                  <div className="flex gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-semibold text-red-700">
+                        Habitación no disponible en estas fechas
+                      </p>
+                      {availData.conflicts.map((c, i) => (
+                        <p key={i} className="text-[11px] text-red-600">
+                          {c.label} · {c.from} → {c.to}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Instrucciones */}
@@ -564,7 +620,8 @@ export function BlockModal({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || hasConflict || availLoading}
+                  title={hasConflict ? 'Hay huéspedes en ese período — selecciona otras fechas' : undefined}
                   className={[
                     'px-5 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                     needsApproval

@@ -38,6 +38,23 @@ export class BlocksController {
   }
 
   /**
+   * GET /blocks/check-availability?roomId=X&startDate=Y&endDate=Z
+   * Pre-flight: verifica si la habitación tiene conflictos en el período.
+   * Debe declararse ANTES de GET :id para que NestJS no interprete
+   * "check-availability" como un param dinámico.
+   */
+  @Get('check-availability')
+  @Roles(HousekeepingRole.RECEPTIONIST, HousekeepingRole.SUPERVISOR)
+  checkAvailability(
+    @CurrentUser() actor: JwtPayload,
+    @Query('roomId') roomId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.service.checkBlockAvailability({ roomId, startDate, endDate }, actor)
+  }
+
+  /**
    * GET /blocks?status=PENDING_APPROVAL&semantic=OUT_OF_ORDER
    * Listar bloqueos de la propiedad con filtros opcionales.
    */

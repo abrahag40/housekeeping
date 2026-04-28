@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -123,6 +124,25 @@ export class BlocksService {
 
     if (endDate && endDate <= startDate) {
       throw new BadRequestException('endDate debe ser posterior a startDate')
+    }
+
+    // Guard: verificar que no haya huéspedes activos en el período (solo bloqueos de habitación)
+    if (dto.roomId) {
+      const farFuture = new Date('2099-12-31T00:00:00.000Z')
+      const avail = await this.availability.check({
+        roomId: dto.roomId,
+        from: startDate,
+        to: endDate ?? farFuture,
+      })
+      const guestConflicts = avail.conflicts.filter(
+        (c) => c.source === 'LOCAL_STAY' || c.source === 'LOCAL_SEGMENT',
+      )
+      if (guestConflicts.length > 0) {
+        const names = [...new Set(guestConflicts.map((c) => c.label))].join(', ')
+        throw new ConflictException(
+          `La habitación tiene huéspedes activos en ese período: ${names}`,
+        )
+      }
     }
 
     // Determinar si requiere aprobación
@@ -710,6 +730,46 @@ export class BlocksService {
       current.setUTCDate(current.getUTCDate() + 1)
     }
     return dates
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CHECK AVAILABILITY (pre-flight para el formulario de creación)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async checkBlockAvailability(
+    dto: { roomId: string; startDate: string; endDate?: string },
+    actor: JwtPayload,
+  ) {
+    const orgId = this.tenant.getOrganizationId()
+
+    // Validar que la habitación pertenezca a la organización del actor
+    const room = await this.prisma.room.findUnique({
+      where: { id: dto.roomId, organizationId: orgId },
+      select: { id: true, number: true },
+    })
+    if (!room) throw new NotFoundException('Habitación no encontrada')
+
+    if (!dto.startDate) throw new BadRequestException('startDate es requerido')
+
+    const from = new Date(dto.startDate + 'T00:00:00.000Z')
+    // Sin fecha fin → usar 1 año desde el inicio (bloqueo indefinido potencial)
+    const to = dto.endDate
+      ? new Date(dto.endDate + 'T00:00:00.000Z')
+      : new Date(from.getTime() + 365 * 24 * 60 * 60 * 1000)
+
+    const result = await this.availability.check({ roomId: dto.roomId, from, to })
+
+    return {
+      available: result.available,
+      conflicts: result.conflicts
+        .filter((c) => c.source === 'LOCAL_STAY' || c.source === 'LOCAL_SEGMENT')
+        .map((c) => ({
+          source: c.source,
+          label: c.label,
+          from: (c.from as Date).toISOString().slice(0, 10),
+          to:   (c.to as Date).toISOString().slice(0, 10),
+        })),
+    }
   }
 
   /**
