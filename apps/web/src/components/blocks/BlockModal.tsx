@@ -358,16 +358,9 @@ export function BlockModal({
 
               {/* Tipo de bloqueo — semantic cards */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-gray-700">
-                    Tipo de bloqueo
-                  </label>
-                  {isForcedSemantic && (
-                    <span className="text-[11px] font-medium text-amber-600">
-                      determinado por el motivo
-                    </span>
-                  )}
-                </div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Tipo de bloqueo
+                </label>
 
                 <div
                   role="radiogroup"
@@ -407,13 +400,10 @@ export function BlockModal({
                           </span>
                         )}
 
-                        <p className={[
-                          'text-xs font-semibold text-gray-900 leading-tight',
-                          isMostUsed && !isSelected ? 'pr-14' : '',
-                        ].join(' ')}>
+                        <p className="text-xs font-semibold text-gray-900 leading-tight pr-12">
                           {SEMANTIC_LABELS[s]}
                         </p>
-                        <p className="text-[11px] text-gray-500 mt-1 leading-[1.45]">
+                        <p className="text-[11px] text-gray-500 mt-1 leading-[1.45] text-left">
                           {SEMANTIC_DESCRIPTIONS[s]}
                         </p>
                       </div>
@@ -445,11 +435,6 @@ export function BlockModal({
                     <option key={r} value={r}>{REASON_LABELS[r]}</option>
                   ))}
                 </select>
-                {isForcedSemantic && (
-                  <p className="text-[11px] text-amber-600 mt-1.5">
-                    ⚠ Clasifica la habitación como &ldquo;{SEMANTIC_LABELS[semantic]}&rdquo; automáticamente
-                  </p>
-                )}
               </div>
 
               {/* Fechas */}
