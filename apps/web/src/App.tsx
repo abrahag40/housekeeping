@@ -20,9 +20,16 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 })
 
+function getToken(): string | null {
+  // Zustand v5 persist hydrates asynchronously — on first render the store
+  // state is still the default (null). Fall back to the raw localStorage key
+  // that setAuth() writes simultaneously so cold loads don't redirect to login.
+  return useAuthStore.getState().token ?? localStorage.getItem('hk_token')
+}
+
 function PmsLayout({ children }: { children: React.ReactNode }) {
-  const token = useAuthStore((s) => s.token)
-  if (!token) return <Navigate to="/login" replace />
+  useAuthStore((s) => s.token) // subscribe so re-renders happen after hydration
+  if (!getToken()) return <Navigate to="/login" replace />
   return (
     <div className="min-h-screen bg-gray-50">
       {children}
@@ -31,8 +38,8 @@ function PmsLayout({ children }: { children: React.ReactNode }) {
 }
 
 function ProtectedLayout({ children }: { children: React.ReactNode }) {
-  const token = useAuthStore((s) => s.token)
-  if (!token) return <Navigate to="/login" replace />
+  useAuthStore((s) => s.token) // subscribe so re-renders happen after hydration
+  if (!getToken()) return <Navigate to="/login" replace />
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Global top bar with hamburger (AppMenu) — same UX everywhere */}

@@ -12,7 +12,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private prisma: PrismaService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // SSE clients can't set custom headers (EventSource API limitation),
+      // so they pass the JWT as a ?token= query param. Accept both forms.
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        (req) => req?.query?.token as string | null ?? null,
+      ]),
       ignoreExpiration: false,
       secretOrKey: configService.get<string>('jwt.secret') ?? 'changeme',
     })
