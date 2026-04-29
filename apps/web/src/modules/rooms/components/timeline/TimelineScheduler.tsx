@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import toast from 'react-hot-toast'
-import { subDays, addDays, differenceInDays, differenceInCalendarDays, startOfDay } from 'date-fns'
+import { subDays, addDays, differenceInDays, startOfDay, format, parseISO, differenceInCalendarDays as diffDays } from 'date-fns'
 import { useTimelineStore } from '../../stores/timeline.store'
 import { TIMELINE } from '../../utils/timeline.constants'
 import { getStayStatus } from '../../utils/timeline.utils'
@@ -9,6 +9,7 @@ import { useDragDrop } from '../../hooks/useDragDrop'
 import { useGuestStays, useCreateGuestStay, useCheckout, useMoveRoom, useSplitMidStay, useSplitReservation, useMarkNoShow, useRevertNoShow, useRoomReadinessTasks, useExtendStay, useExtendSameRoom, useExtendNewRoom, useMoveExtensionRoom, useConfirmCheckin } from '../../hooks/useGuestStays'
 import { guestStaysApi } from '../../api/guest-stays.api'
 import { useStayJourneys } from '../../hooks/useStayJourneys'
+import { useBlocks, useCreateBlock, useReleaseBlock, useCancelBlock } from '../../hooks/useBlocks'
 import { useRoomSSE } from '../../hooks/useRoomSSE'
 import { useSoftLockSSE } from '@/hooks/useSoftLock'
 import { usePropertySettings } from '@/hooks/usePropertySettings'
@@ -19,6 +20,7 @@ import { DateHeader } from './DateHeader'
 import { RoomColumn } from './RoomColumn'
 import { TimelineGrid } from './TimelineGrid'
 import { BookingsLayer } from './BookingsLayer'
+import { BlocksLayer } from './BlocksLayer'
 import { TodayColumnHighlight } from './TodayColumnHighlight'
 import { OccupancyFooter } from './OccupancyFooter'
 import { DragGhost } from './DragGhost'
@@ -32,6 +34,10 @@ import { MoveExtensionConfirmDialog } from '../dialogs/MoveExtensionConfirmDialo
 import { MoveReservationConfirmDialog } from '../dialogs/MoveReservationConfirmDialog'
 import { NoShowConfirmModal } from './NoShowConfirmModal'
 import { ConfirmCheckinDialog } from '../dialogs/ConfirmCheckinDialog'
+import { BlockModal } from '@/components/blocks/BlockModal'
+import type { RoomBlockDto } from '@zenix/shared'
+import { BlockSemantic, BlockStatus } from '@zenix/shared'
+import { SEMANTIC_LABELS, REASON_LABELS } from '@/pages/BlocksPage'
 import type {
   FlatRow,
   DropResult,
@@ -209,6 +215,12 @@ export function TimelineScheduler() {
 
   const { journeyBlocks: rawJourneyBlocks } = useStayJourneys(PROPERTY_ID, dataWindow.from, dataWindow.to)
 
+  // ─── SmartBlock data (ACTIVE + APPROVED + PENDING_APPROVAL) ────────────────
+  const { data: roomBlocks = [] } = useBlocks(PROPERTY_ID)
+  const createBlockMut  = useCreateBlock(PROPERTY_ID)
+  const releaseBlockMut = useReleaseBlock()
+  const cancelBlockMut  = useCancelBlock()
+
   // Propagate `noShowAt` from parent GuestStay to each journey segment block.
   // The journeys endpoint doesn't return this field, but drag/drop conflict
   // detection needs it: a no-show releases inventory (CLAUDE.md §17) — segments
@@ -275,7 +287,7 @@ export function TimelineScheduler() {
         journeyId: draggedJourneyBlock.journeyId!,
         newRoomId: result.newRoomId,
         newRoomNumber: newRoomRow?.room?.number ?? result.newRoomId.slice(0, 8),
-        nights: differenceInCalendarDays(draggedJourneyBlock.checkOut, draggedJourneyBlock.checkIn),
+        nights: diffDays(draggedJourneyBlock.checkOut, draggedJourneyBlock.checkIn),
         checkIn: draggedJourneyBlock.checkIn,
         checkOut: draggedJourneyBlock.checkOut,
       })
@@ -305,7 +317,7 @@ export function TimelineScheduler() {
       fromRoomNumber: fromRoomRow?.room?.number,
       newRoomId: result.newRoomId,
       newRoomNumber: newRoomRow?.room?.number ?? result.newRoomId.slice(0, 8),
-      nights: Math.max(1, differenceInCalendarDays(draggedStay.checkOut, draggedStay.checkIn)),
+      nights: Math.max(1, diffDays(draggedStay.checkOut, draggedStay.checkIn)),
       checkIn: draggedStay.checkIn,
       checkOut: draggedStay.checkOut,
     })
@@ -339,6 +351,15 @@ export function TimelineScheduler() {
   const noShowTarget = noShowDialog
     ? ([...stays, ...journeyBlocks].find((s) => s.id === noShowDialog.stayId) ?? null)
     : null
+
+  // ─── Block modal ───────────────────────────────────────────────
+  const [blockModal, setBlockModal] = useState<{
+    roomId?: string
+    startDate?: string
+    endDate?: string
+  } | null>(null)
+
+  const [blockDetail, setBlockDetail] = useState<RoomBlockDto | null>(null)
 
   // ─── Extend stay by drag ───────────────────────────────────────
   const [extendState, setExtendState] = useState<ExtendState | null>(null)
@@ -445,10 +466,29 @@ export function TimelineScheduler() {
     return set
   }, [allBlocksForDragCheck])
 
+  // Block occupancy set — ACTIVE/APPROVED blocks mark cells as non-interactive
+  // so the ghost block and check-in click don't fire on blocked dates.
+  const blockOccupancySet = useMemo(() => {
+    const set = new Set<string>()
+    const MS_DAY = 86400000
+    for (const block of roomBlocks) {
+      if (!block.roomId) continue
+      if (block.status !== 'ACTIVE' && block.status !== 'APPROVED') continue
+      const start = new Date(block.startDate).getTime()
+      const end   = block.endDate ? new Date(block.endDate).getTime() : start + MS_DAY * 365
+      for (let t = start; t < end; t += MS_DAY) {
+        const d = new Date(t)
+        set.add(`${block.roomId}:${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`)
+      }
+    }
+    return set
+  }, [roomBlocks])
+
   const isOccupied = useCallback((roomId: string, date: Date) => {
     const d = startOfDay(date)
-    return occupancySet.has(`${roomId}:${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`)
-  }, [occupancySet])
+    const key = `${roomId}:${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`
+    return occupancySet.has(key) || blockOccupancySet.has(key)
+  }, [occupancySet, blockOccupancySet])
 
   const {
     dragState,
@@ -557,7 +597,7 @@ export function TimelineScheduler() {
     function onMouseUp() {
       setExtendState(prev => {
         if (!prev) return null
-        const added = differenceInCalendarDays(prev.previewCheckOut, prev.originalCheckOut)
+        const added = diffDays(prev.previewCheckOut, prev.originalCheckOut)
         if (added >= 1) {
           const snap = { ...prev }
           // Pre-flight: check if the original room is available for the extension dates.
@@ -686,6 +726,7 @@ export function TimelineScheduler() {
               onToggleGroup={toggleGroup}
               readinessTasks={readinessTasks}
               lockedRooms={lockedRooms}
+              onBlockRequest={(roomId) => setBlockModal({ roomId })}
             />
           </div>
 
@@ -705,6 +746,12 @@ export function TimelineScheduler() {
                 const roomRow = flatRows.find(r => r.id === roomId && r.type === 'room')
                 setCheckInDialog({ open: true, roomId, roomNumber: roomRow?.room?.number ?? roomId.slice(0, 8), checkIn: date })
               }}
+              onCellContextMenu={(roomId, date) => {
+                setBlockModal({
+                  roomId,
+                  startDate: format(date, 'yyyy-MM-dd'),
+                })
+              }}
               isOccupied={isOccupied}
               getRoomRate={(roomId) => {
                 const group = groups.find(g => g.rooms.some(r => r.id === roomId))
@@ -723,7 +770,7 @@ export function TimelineScheduler() {
                 checkOut at (checkOutDays * dayWidth + dayWidth/2), so we offset
                 by dayWidth/2 to avoid overlapping the original block. */}
             {extendState && (() => {
-              const daysAdded = differenceInCalendarDays(extendState.previewCheckOut, extendState.originalCheckOut)
+              const daysAdded = diffDays(extendState.previewCheckOut, extendState.originalCheckOut)
               const topY = extendState.rowIndex * TIMELINE.ROW_HEIGHT + extendState.groupHeaderOffsetY
               const originLeft = differenceInDays(extendState.originalCheckOut, POOL_START) * dayWidth + dayWidth / 2
 
@@ -780,6 +827,15 @@ export function TimelineScheduler() {
               )
             })()}
 
+            <BlocksLayer
+              blocks={roomBlocks}
+              flatRows={flatRows}
+              dayWidth={dayWidth}
+              calendarStart={POOL_START}
+              calendarEnd={dataWindow.to}
+              totalWidth={totalWidth}
+              onBlockClick={setBlockDetail}
+            />
             <BookingsLayer
               stays={hideNoShows ? staysWithoutJourneys.filter((s) => !s.noShowAt) : staysWithoutJourneys}
               nsStripeIds={hideNoShows ? undefined : nsStripeIds}
@@ -1114,6 +1170,183 @@ export function TimelineScheduler() {
           }}
         />
       )}
+
+      {/* ─── BlockModal — create new block ──────────────────── */}
+      <BlockModal
+        isOpen={!!blockModal}
+        onClose={() => setBlockModal(null)}
+        prefillRoomId={blockModal?.roomId}
+        prefillStartDate={blockModal?.startDate}
+        prefillEndDate={blockModal?.endDate}
+        onSubmit={async (dto) => {
+          await createBlockMut.mutateAsync(dto)
+          setBlockModal(null)
+        }}
+      />
+
+      {/* ─── Block detail sheet ──────────────────────────────── */}
+      {blockDetail && (() => {
+        const BLOCK_COLORS: Record<BlockSemantic, { accent: string; bg: string; pill: string; pillText: string }> = {
+          [BlockSemantic.OUT_OF_SERVICE]:   { accent: '#f59e0b', bg: 'rgba(245,158,11,0.07)',  pill: 'bg-amber-100',  pillText: 'text-amber-800'  },
+          [BlockSemantic.OUT_OF_ORDER]:     { accent: '#ef4444', bg: 'rgba(239,68,68,0.07)',   pill: 'bg-red-100',    pillText: 'text-red-800'    },
+          [BlockSemantic.OUT_OF_INVENTORY]: { accent: '#3b82f6', bg: 'rgba(59,130,246,0.07)',  pill: 'bg-blue-100',   pillText: 'text-blue-800'   },
+          [BlockSemantic.HOUSE_USE]:        { accent: '#a855f7', bg: 'rgba(168,85,247,0.07)',  pill: 'bg-purple-100', pillText: 'text-purple-800' },
+        }
+        const SEMANTIC_ICONS: Record<BlockSemantic, string> = {
+          [BlockSemantic.OUT_OF_SERVICE]:   '🔧',
+          [BlockSemantic.OUT_OF_ORDER]:     '🚫',
+          [BlockSemantic.OUT_OF_INVENTORY]: '📦',
+          [BlockSemantic.HOUSE_USE]:        '🏠',
+        }
+
+        const c = BLOCK_COLORS[blockDetail.semantic]
+        const roomNum = (blockDetail.room as any)?.number
+        const startD  = parseISO(blockDetail.startDate)
+        const endD    = blockDetail.endDate ? parseISO(blockDetail.endDate) : null
+        const nights  = endD ? diffDays(endD, startD) : null
+        const fmtDate = (d: Date) => format(d, 'dd/MM/yyyy')
+        const isPending = blockDetail.status === BlockStatus.PENDING_APPROVAL
+        const isApproved = blockDetail.status === BlockStatus.APPROVED
+        const canRelease = blockDetail.status === BlockStatus.ACTIVE
+        const canCancel  = isPending || isApproved
+        const isWorking  = releaseBlockMut.isPending || cancelBlockMut.isPending
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/30"
+            onClick={() => setBlockDetail(null)}
+          >
+            <div
+              className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:w-[380px] overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Accent top bar */}
+              <div style={{ height: 4, background: c.accent }} />
+
+              {/* Header */}
+              <div className="px-5 pt-4 pb-3 flex items-start justify-between gap-3" style={{ background: c.bg }}>
+                <div className="min-w-0">
+                  <p className="text-lg font-semibold text-slate-900 leading-tight">
+                    {roomNum ? `Habitación ${roomNum}` : 'Bloqueo'}
+                  </p>
+                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${c.pill} ${c.pillText}`}>
+                      {SEMANTIC_ICONS[blockDetail.semantic]} {SEMANTIC_LABELS[blockDetail.semantic]}
+                    </span>
+                    {isPending && (
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                        ⏳ Pendiente de aprobación
+                      </span>
+                    )}
+                    {isApproved && (
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                        ✓ Aprobado
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setBlockDetail(null)}
+                  className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-slate-400 hover:text-slate-600 hover:bg-black/5 transition-colors text-base leading-none mt-0.5"
+                >✕</button>
+              </div>
+
+              {/* Body */}
+              <div className="px-5 py-4 space-y-2.5">
+                {/* Reason */}
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs text-slate-400 shrink-0">Motivo</span>
+                  <span className="text-sm text-slate-800 font-medium text-right">{REASON_LABELS[blockDetail.reason]}</span>
+                </div>
+
+                {/* Duration */}
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs text-slate-400 shrink-0">Duración</span>
+                  <span className="text-sm text-slate-800 font-medium text-right">
+                    {nights !== null ? `${nights} ${nights === 1 ? 'noche' : 'noches'}` : 'Indefinida'}
+                  </span>
+                </div>
+
+                {/* Dates */}
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs text-slate-400 shrink-0">Inicio</span>
+                  <span className="text-sm text-slate-800 font-mono">{fmtDate(startD)}</span>
+                </div>
+                {endD && (
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs text-slate-400 shrink-0">Fin</span>
+                    <span className="text-sm text-slate-800 font-mono">{fmtDate(endD)}</span>
+                  </div>
+                )}
+
+                {/* Creator */}
+                {(blockDetail as any).requestedBy?.name && (
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs text-slate-400 shrink-0">Creado por</span>
+                    <span className="text-sm text-slate-800 font-medium text-right">{(blockDetail as any).requestedBy.name}</span>
+                  </div>
+                )}
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs text-slate-400 shrink-0">Registrado</span>
+                  <span className="text-sm text-slate-800 font-mono">{fmtDate(parseISO(blockDetail.createdAt))}</span>
+                </div>
+
+                {/* Notes */}
+                {blockDetail.notes && (
+                  <div className="mt-1 pt-2.5 border-t border-slate-100">
+                    <p className="text-xs text-slate-400 mb-1">Instrucciones</p>
+                    <p className="text-sm text-slate-700 leading-snug">{blockDetail.notes}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="px-5 pb-5 pt-1 flex flex-col gap-2">
+                {canRelease && (
+                  <button
+                    disabled={isWorking}
+                    onClick={async () => {
+                      try {
+                        await releaseBlockMut.mutateAsync(blockDetail.id)
+                        setBlockDetail(null)
+                        toast.success('Habitación liberada')
+                      } catch {
+                        toast.error('No se pudo liberar la habitación')
+                      }
+                    }}
+                    className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    {releaseBlockMut.isPending ? 'Liberando…' : 'Liberar habitación ahora'}
+                  </button>
+                )}
+                {canCancel && (
+                  <button
+                    disabled={isWorking}
+                    onClick={async () => {
+                      try {
+                        await cancelBlockMut.mutateAsync({ blockId: blockDetail.id, reason: 'Cancelado desde el calendario' })
+                        setBlockDetail(null)
+                        toast.success('Bloqueo cancelado')
+                      } catch {
+                        toast.error('No se pudo cancelar el bloqueo')
+                      }
+                    }}
+                    className="w-full py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    {cancelBlockMut.isPending ? 'Cancelando…' : 'Cancelar solicitud'}
+                  </button>
+                )}
+                <button
+                  className="w-full py-1.5 text-xs text-slate-400 hover:text-indigo-600 transition-colors"
+                  onClick={() => { setBlockDetail(null); window.location.href = '/blocks' }}
+                >
+                  Ver todos los bloqueos →
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

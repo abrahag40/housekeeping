@@ -14,6 +14,8 @@ interface TimelineGridProps {
   /** Suppress ghost block while a drag or resize gesture is in progress */
   isDragging?: boolean
   onCellClick?: (roomId: string, date: Date) => void
+  /** Right-click on any cell (occupied or not) — used to open BlockModal */
+  onCellContextMenu?: (roomId: string, date: Date) => void
   isOccupied?: (roomId: string, date: Date) => boolean
   /** Returns base rate + currency for a room — used to render ghost block price */
   getRoomRate?: (roomId: string) => { rate: number; currency: string } | undefined
@@ -28,6 +30,7 @@ export function TimelineGrid({
   dragIsValid = true,
   isDragging = false,
   onCellClick,
+  onCellContextMenu,
   isOccupied,
   getRoomRate,
 }: TimelineGridProps) {
@@ -113,6 +116,12 @@ export function TimelineGrid({
                       left: vc.start,
                       width: vc.size,
                       height: h,
+                    }}
+                    onContextMenu={(e) => {
+                      if (!isPastDay) {
+                        e.preventDefault()
+                        onCellContextMenu?.(row.id, vc.date)
+                      }
                     }}
                   >
                     {/* AM half (left) — checkout zone, no interaction */}

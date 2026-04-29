@@ -42,18 +42,24 @@ export class SettingsService {
    * @throws            NotFoundException si la propiedad no existe en la base de datos
    */
   async findByProperty(propertyId: string) {
-    let settings = await this.prisma.propertySettings.findUnique({ where: { propertyId } })
+    const include = { property: { select: { type: true } } } as const
+
+    let settings = await this.prisma.propertySettings.findUnique({
+      where: { propertyId },
+      include,
+    })
     if (!settings) {
-      // Auto-create with defaults on first access
-      // Verificar primero que la propiedad padre existe para dar un error semántico claro
       const property = await this.prisma.property.findUnique({ where: { id: propertyId } })
       if (!property) throw new NotFoundException('Property not found')
-      // Crear con solo propertyId; los demás campos usan los defaults del schema de Prisma
       settings = await this.prisma.propertySettings.create({
         data: { propertyId },
+        include,
       })
     }
-    return settings
+
+    // Flatten property.type → propertyType para que el frontend lo consuma directamente
+    const { property, ...rest } = settings
+    return { ...rest, propertyType: property.type }
   }
 
   /**

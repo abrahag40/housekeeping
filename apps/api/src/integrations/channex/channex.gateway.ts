@@ -39,6 +39,20 @@ export interface ChannexInventoryUpdate {
   traceId: string             // ID interno para correlacionar con audit trail
 }
 
+/**
+ * Modelo de conteo absoluto para hostales con camas múltiples (dorms).
+ *
+ * Channex espera valores absolutos: `available=3` en la fecha D significa
+ * "quedan 3 camas disponibles" — no deltas. Esto garantiza idempotencia:
+ * una re-sincronización siempre produce el estado correcto sin replay de eventos.
+ */
+export interface ChannexAbsoluteUpdate {
+  channexPropertyId?: string           // PropertySettings.channexPropertyId
+  roomTypeId: string                   // Room.channexRoomTypeId
+  entries: { date: string; available: number }[]  // YYYY-MM-DD → conteo absoluto
+  traceId: string
+}
+
 export interface ChannexPullResult {
   fromChannex: boolean
   slots: ChannexAvailabilitySlot[]
@@ -182,6 +196,63 @@ export class ChannexGateway {
       // Best-effort: loguear y continuar (CLAUDE.md §31)
       this.logger.error(
         `[Channex] pushInventory network error reason=${update.reason} trace=${update.traceId}: ${msg}`,
+      )
+    }
+  }
+
+  // ─── Push absolute availability (hostel dorm model) ────────────────────────
+  //
+  // Channex endpoint: POST /availability
+  // Body: { values: [{ property_id, room_type_id, date, availability }] }
+  //
+  // Diferencia clave vs pushInventory (delta):
+  //   pushInventory envía 0 o 1 (modelo hotel — 1 unidad por room type).
+  //   pushAbsoluteAvailability envía el CONTEO REAL de unidades disponibles,
+  //   calculado externamente por AvailabilityService.computeAndPushInventory().
+  //   Esto es correcto para dorms con N camas: si hay 4 camas y 1 bloqueada,
+  //   se envía availability=3 — Channex y las OTAs muestran 3 disponibles.
+  //
+  // Idempotente: llamar dos veces con el mismo conteo produce el mismo resultado.
+  // Best-effort (CLAUDE.md §31): nunca lanza excepción.
+  async pushAbsoluteAvailability(update: ChannexAbsoluteUpdate): Promise<void> {
+    if (!this.enabled) return
+    if (!update.channexPropertyId) return
+    if (update.entries.length === 0) return
+
+    const values = update.entries.map(({ date, available }) => ({
+      property_id:  update.channexPropertyId,
+      room_type_id: update.roomTypeId,
+      date,
+      availability: available,
+    }))
+
+    try {
+      const res = await fetch(`${this.baseUrl}/availability`, {
+        method: 'POST',
+        headers: {
+          'user-api-key':  this.apiKey!,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({ values }),
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        this.logger.error(
+          `[Channex] pushAbsoluteAvailability failed HTTP ${res.status} ` +
+          `entries=${values.length} trace=${update.traceId}: ${text}`,
+        )
+        return
+      }
+
+      this.logger.log(
+        `[Channex] pushAbsoluteAvailability OK ` +
+        `roomType=${update.roomTypeId} entries=${values.length} trace=${update.traceId}`,
+      )
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(
+        `[Channex] pushAbsoluteAvailability network error trace=${update.traceId}: ${msg}`,
       )
     }
   }

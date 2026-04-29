@@ -222,6 +222,15 @@ export enum BlockStatus {
   REJECTED         = 'REJECTED',         // rechazado por supervisor
 }
 
+export enum PropertyType {
+  HOTEL           = 'HOTEL',
+  HOSTAL          = 'HOSTAL',
+  BOUTIQUE        = 'BOUTIQUE',
+  GLAMPING        = 'GLAMPING',
+  ECO_LODGE       = 'ECO_LODGE',
+  VACATION_RENTAL = 'VACATION_RENTAL',
+}
+
 /**
  * BlockLogEvent — eventos auditables del ciclo de vida.
  * staffId es null para eventos del sistema (cron, auto-activación).

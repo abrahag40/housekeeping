@@ -1,8 +1,27 @@
 import { useEffect, useRef } from 'react'
-import type { SseEvent } from '@zenix/shared'
+import type { SseEvent, SseEventType } from '@zenix/shared'
 import { useAuthStore } from '../store/auth'
 
 type Handler = (event: SseEvent) => void
+
+// The server always emits named events (event: <type>\ndata: {...}\n\n).
+// The browser's EventSource only fires 'message' for events WITHOUT an event
+// name. We must register a listener for every known type so useSSE callers
+// receive all server events regardless of which named type the server uses.
+const ALL_SSE_TYPES: SseEventType[] = [
+  'task:planned', 'task:ready', 'task:started', 'task:done',
+  'task:unassigned', 'task:cancelled',
+  'maintenance:reported', 'discrepancy:reported',
+  'room:ready', 'checkout:confirmed', 'checkin:completed', 'room:moved',
+  'block:created', 'block:approved', 'block:rejected',
+  'block:activated', 'block:expired', 'block:cancelled', 'block:extended',
+  'checkout:early',
+  'stay:no_show', 'stay:no_show_reverted',
+  'arrival:at_risk',
+  'soft:lock:acquired', 'soft:lock:released',
+  'notification:new',
+  'checkin:confirmed',
+]
 
 export function useSSE(onEvent: Handler) {
   const handlerRef = useRef(onEvent)
@@ -42,6 +61,12 @@ export function useSSE(onEvent: Handler) {
         }
       }
 
+      // Register on every known named event type — the server always sends
+      // 'event: <type>' so the generic 'message' listener alone misses them.
+      for (const type of ALL_SSE_TYPES) {
+        es.addEventListener(type, handle)
+      }
+      // Keep 'message' as fallback for any future events without a named type.
       es.addEventListener('message', handle)
       es.addEventListener('ping', () => {})
 

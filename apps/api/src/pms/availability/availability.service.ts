@@ -223,4 +223,125 @@ export class AvailabilityService {
       )
     }
   }
+
+  /**
+   * Compute absolute availability per date for a dorm room and push to Channex.
+   *
+   * Designed for hostels where a room_type in Channex = 1 dorm with N beds.
+   * Channex expects absolute counts (availability=3 means "3 beds free today"),
+   * not deltas. This guarantees idempotency: re-syncing always produces the
+   * correct state regardless of prior pushes.
+   *
+   * Algorithm per date:
+   *   available = max(0, totalUnits - activeStays - activeSegments - blockedSlots)
+   *   where blockedSlots = totalUnits (room-level block) or 1 (unit-level block)
+   *
+   * Best-effort (CLAUDE.md §31): never throws, logs on failure.
+   */
+  async computeAndPushInventory(roomId: string, dates: Date[]): Promise<void> {
+    if (!this.channex.enabled) return
+    if (dates.length === 0) return
+
+    try {
+      const room = await this.prisma.room.findUnique({
+        where: { id: roomId },
+        select: {
+          propertyId: true,
+          channexRoomTypeId: true,
+          units: { select: { id: true } },
+        },
+      })
+      if (!room?.channexRoomTypeId) return
+
+      const settings = await this.prisma.propertySettings.findUnique({
+        where: { propertyId: room.propertyId },
+        select: { channexPropertyId: true },
+      })
+      if (!settings?.channexPropertyId) return
+
+      const channexPropertyId = settings.channexPropertyId
+      const channexRoomTypeId  = room.channexRoomTypeId
+      const totalUnits         = room.units.length
+      if (totalUnits === 0) return
+
+      const firstDate     = dates[0]
+      const lastDate      = dates[dates.length - 1]
+      const dayAfterLast  = new Date(lastDate)
+      dayAfterLast.setUTCDate(dayAfterLast.getUTCDate() + 1)
+
+      // 3 bulk queries for the full range — processed in-memory per date
+      const [stays, segments, blocks] = await Promise.all([
+        this.prisma.guestStay.findMany({
+          where: {
+            roomId,
+            actualCheckout:    null,
+            noShowAt:          null,
+            checkinAt:         { lt: dayAfterLast },
+            scheduledCheckout: { gt: firstDate },
+          },
+          select: { checkinAt: true, scheduledCheckout: true },
+        }),
+        this.prisma.staySegment.findMany({
+          where: {
+            roomId,
+            status:   { in: ['ACTIVE', 'PENDING'] },
+            checkIn:  { lt: dayAfterLast },
+            checkOut: { gt: firstDate },
+          },
+          select: { checkIn: true, checkOut: true },
+        }),
+        // Room-level blocks (roomId set) OR unit-level blocks (unit.roomId matches)
+        this.prisma.roomBlock.findMany({
+          where: {
+            status:    'ACTIVE',
+            startDate: { lte: lastDate },
+            AND: [
+              { OR: [{ endDate: null }, { endDate: { gt: firstDate } }] },
+              { OR: [{ roomId }, { unit: { roomId } }] },
+            ],
+          },
+          select: { roomId: true, unitId: true, startDate: true, endDate: true },
+        }),
+      ])
+
+      const traceId = `abs-sync-${roomId}-${Date.now()}`
+      const entries: { date: string; available: number }[] = []
+
+      for (const date of dates) {
+        // Exclusive upper bound of the day (next midnight UTC)
+        const dEnd = new Date(date)
+        dEnd.setUTCDate(dEnd.getUTCDate() + 1)
+
+        const staysOnDay = stays.filter(
+          (s) => s.checkinAt < dEnd && s.scheduledCheckout > date,
+        ).length
+
+        const segsOnDay = segments.filter(
+          (s) => s.checkIn < dEnd && s.checkOut > date,
+        ).length
+
+        // Room-level block occupies all N units; unit-level block occupies 1
+        let blockedSlots = 0
+        for (const b of blocks) {
+          const bEnd = b.endDate ?? dayAfterLast
+          if (b.startDate <= date && bEnd > date) {
+            blockedSlots += b.roomId ? totalUnits : 1
+          }
+        }
+
+        const available = Math.max(0, totalUnits - staysOnDay - segsOnDay - blockedSlots)
+        entries.push({ date: date.toISOString().slice(0, 10), available })
+      }
+
+      await this.channex.pushAbsoluteAvailability({
+        channexPropertyId,
+        roomTypeId: channexRoomTypeId,
+        entries,
+        traceId,
+      })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`[computeAndPushInventory] roomId=${roomId}: ${msg}`)
+    }
+  }
 }

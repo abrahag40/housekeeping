@@ -357,6 +357,54 @@ Sin Channex (hoy):
 
 ---
 
+## Módulo 3b — Bloqueos de Habitación (SmartBlock)
+
+> El módulo que cierra el gap entre operación y mantenimiento: cuando una habitación no puede recibir huéspedes, el sistema lo sabe antes de que alguien intente venderla.
+
+### El problema: habitaciones bloqueadas sin visibilidad en el calendario
+
+En la mayoría de los PMS entry-level, los bloqueos de habitación (mantenimiento, limpieza profunda, inspección, habitación fuera de servicio) se gestionan fuera del sistema — en un papel, una hoja de Excel, o un mensaje de WhatsApp al recepcionista. El resultado: el sistema sigue mostrando la habitación como disponible y un recepcionista la vende por error.
+
+Opera Cloud tiene bloqueos nativos pero requieren navegación de 4+ pantallas. Cloudbeds los llama "out-of-service" pero no los muestra en el calendario principal — requieren un módulo separado. Mews los integra pero solo para habitaciones completas, no per-cama.
+
+### La solución de Zenix: bloqueos visuales en el calendario PMS
+
+Un bloqueo en Zenix es un bloque visual diferenciado que aparece directamente en el calendario — en la misma fila de la habitación, en el mismo rango de fechas. El recepcionista lo ve al instante sin cambiar de pantalla.
+
+Tipos de bloqueo:
+- **MAINTENANCE** — Reparación, obra, inspección. La habitación queda fuera de disponibilidad.
+- **DEEP_CLEANING** — Limpieza profunda programada. También fuera de venta.
+- **OWNER_BLOCK** — Uso del propietario (común en vacation rentals y boutique hotels).
+- **OOS (Out of Service)** — Habitación temporalmente inhabilitada por cualquier otra razón.
+
+Flujo completo:
+1. El supervisor crea el bloqueo desde el botón `[+]` del menú superior — elige habitación, tipo, fechas y razón.
+2. Aparece inmediatamente en el calendario con color diferenciado (gris con borde, sin texto de huésped).
+3. `AvailabilityService` lo incluye en la verificación de disponibilidad — ninguna reserva puede crearse en esas fechas hasta que el bloqueo sea liberado o cancelado.
+4. El supervisor puede extender, aprobar, rechazar, o liberar el bloqueo desde la `BlocksPage`.
+
+### Aprobación de bloqueos — workflow de supervisión
+
+Los bloqueos que no son de emergencia pasan por un flujo de aprobación:
+- **PENDING_APPROVAL** — el bloqueo existe pero aún no está activo. Aparece en el calendario con visual ámbar.
+- **APPROVED** — un supervisor lo aprueba. El bloqueo bloquea disponibilidad activamente.
+- **ACTIVE** — el bloqueo está en curso (fechas de inicio alcanzadas).
+- **CANCELLED / REJECTED** — el bloqueo es eliminado. La disponibilidad se restaura al instante.
+
+### Guard anti-overbooking en extensión de bloqueos
+
+Cuando un supervisor intenta extender el período de un bloqueo, el sistema verifica que no haya huéspedes ya reservados en ese período. Si hay un conflicto, rechaza la extensión con el nombre del huésped y sus fechas — nunca en silencio. El recepcionista sabe exactamente qué tiene que resolver antes de poder extender.
+
+**Fundamento competitivo:** en Opera Cloud, extender un bloqueo puede sobrescribir reservas sin advertencia en versiones legacy. En Cloudbeds, los OOS no tienen verificación cruzada con reservas activas. En Zenix, el mismo `AvailabilityService` que protege las reservas de huéspedes también protege las operaciones de mantenimiento.
+
+### Actualización en tiempo real sin refrescar el navegador
+
+Cuando un bloqueo es creado, aprobado, rechazado, extendido o liberado, el calendario se actualiza automáticamente en todos los navegadores conectados — sin recargar la página. Esto usa el mismo mecanismo SSE (Server-Sent Events) que actualiza las llegadas, los no-shows y las tareas de housekeeping.
+
+**Para el speech de ventas:** en un hotel con 2 recepcionistas en turno simultáneo, si el supervisor bloquea una habitación desde su tableta, ambos recepcionistas ven el cambio en su pantalla en menos de 2 segundos. Ningún PMS entry-level tiene este nivel de coordinación en tiempo real entre roles.
+
+---
+
 ## Módulo 4 — Reportes y Trazabilidad
 
 ### El dashboard del supervisor
@@ -496,6 +544,8 @@ El resultado: cero incidencias de mantenimiento que caen en el olvido. Un regist
 | Operar hoteles en múltiples países | Night audit multi-timezone por propiedad (hora local real) |
 | Cumplimiento fiscal en LATAM | Registros inmutables + CFDI-ready + moneda ISO |
 | Cero overbooking con OTAs | Hard block transaccional + Channex.io (mismo estándar Opera/Mews) |
+| Bloquear habitaciones por mantenimiento sin venderlas por error | SmartBlock visible en el calendario + guard de disponibilidad en extensión |
+| Que el calendario se actualice solo cuando cambia algo | SSE en tiempo real para bloqueos, reservas, no-shows y tareas — todos los roles lo ven al instante |
 | Ver en el calendario quién fue el no-show cuando hay nueva reserva | Franja NS identificable con nombre sin ocultar ni sobrelapear la reserva activa |
 | Revertir un no-show sin crear overbooking por error | Guard backend que rechaza la reversión si el cuarto ya fue reasignado, con mensaje accionable |
 | Trazabilidad ante disputas | Audit trail con actor, timestamp y razón en cada operación |

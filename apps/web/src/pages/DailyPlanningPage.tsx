@@ -43,7 +43,7 @@ import type {
   PropertySettingsDto,
   SseEvent,
 } from '@zenix/shared'
-import { CleaningStatus, DiscrepancyStatus, PlanningCellState } from '@zenix/shared'
+import { CleaningStatus, DiscrepancyStatus, PlanningCellState, BlockStatus, type RoomBlockDto } from '@zenix/shared'
 
 // ─── Constantes de módulo ─────────────────────────────────────────────────────
 
@@ -294,6 +294,34 @@ export function DailyPlanningPage() {
     },
     refetchInterval: 60_000,
   })
+
+  // Active blocks today — to show 🔒 badge on blocked rooms in the planning grid
+  const { data: activeBlocksRaw = [] } = useQuery<RoomBlockDto[]>({
+    queryKey: ['blocks', 'planning-day'],
+    queryFn: async () => {
+      const [active, approved] = await Promise.all([
+        api.get<RoomBlockDto[]>(`/blocks?status=${BlockStatus.ACTIVE}`),
+        api.get<RoomBlockDto[]>(`/blocks?status=${BlockStatus.APPROVED}`),
+      ])
+      return [...active, ...approved]
+    },
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  })
+
+  const blockedRoomIds = useMemo(() => {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayMs = today.getTime()
+    const set = new Set<string>()
+    for (const b of activeBlocksRaw) {
+      if (!b.roomId) continue
+      const start = new Date(b.startDate).getTime()
+      const end   = b.endDate ? new Date(b.endDate).getTime() : Infinity
+      if (start <= todayMs && end > todayMs) set.add(b.roomId)
+    }
+    return set
+  }, [activeBlocksRaw])
 
   // ── SSE ───────────────────────────────────────────────────────────────────
 
@@ -727,6 +755,7 @@ export function DailyPlanningPage() {
                 overrides={overrides}
                 setNote={setNote}
                 confirmed={planningIsDone}
+                blockedRoomIds={blockedRoomIds}
               />
             </section>
           )}
@@ -750,6 +779,7 @@ export function DailyPlanningPage() {
                 overrides={overrides}
                 setNote={setNote}
                 confirmed={planningIsDone}
+                blockedRoomIds={blockedRoomIds}
               />
             </section>
           )}
@@ -894,6 +924,7 @@ type CellFns = {
   overrides:    Map<string, CellOverride>
   setNote:      (key: string, note: string) => void
   confirmed:    boolean
+  blockedRoomIds?: Set<string>
 }
 
 // ─── Acordeón de habitación ────────────────────────────────────────────────────
@@ -1101,7 +1132,7 @@ function PlanningRow({
   onToggle,
   getState, cycleState, toggleUrgente,
   noteTarget, setNoteTarget, overrides, setNote,
-  confirmed,
+  confirmed, blockedRoomIds,
 }: { row: DailyPlanningRow; expanded: boolean; onToggle: () => void } & CellFns) {
   const checkoutCount = row.units.filter((b) => {
     const s = getState(row.roomId, b.unitId, b)
@@ -1110,6 +1141,7 @@ function PlanningRow({
   const urgentCount = row.units.filter(
     (b) => getState(row.roomId, b.unitId, b) === PlanningCellState.CHECKOUT_WITH_CHECKIN,
   ).length
+  const isBlocked = blockedRoomIds?.has(row.roomId) ?? false
 
   return (
     <RoomAccordion
@@ -1119,6 +1151,11 @@ function PlanningRow({
       header={
         <>
           <span className="font-semibold text-sm text-gray-900">{row.roomNumber}</span>
+          {isBlocked && (
+            <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+              🔒 Bloqueada
+            </span>
+          )}
           {row.floor != null && (
             <span className="text-xs text-gray-400">P{row.floor}</span>
           )}
